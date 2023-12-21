@@ -291,7 +291,14 @@ bool UglTFRuntimeFBXFunctionLibrary::LoadFBXAsRuntimeLODByNodeId(UglTFRuntimeAss
 				RuntimeLOD.Primitives.Add(MoveTemp(Primitive));
 			}
 
+			for (int32 AnimStackIndex = 0; AnimStackIndex < Scene->anim_stacks.count; AnimStackIndex++)
+			{
+				ufbx_anim_stack* AnimStack = Scene->anim_stacks.data[AnimStackIndex];
 
+				UE_LOG(LogTemp, Error, TEXT("Anim %s %f %f"), UTF8_TO_TCHAR(AnimStack->name.data), AnimStack->time_begin, AnimStack->time_end);
+
+				FTransform Transform = glTFRuntimeFBX::GetTransform(Asset, ufbx_evaluate_transform(&AnimStack->anim, Node, 0.1));
+			}
 
 			break;
 		}
