@@ -1,7 +1,7 @@
 {
 	"FileVersion": 3,
 	"Version": 1,
-	"VersionName": "1.0",
+	"VersionName": "20240427",
 	"FriendlyName": "glTFRuntimeFBX",
 	"Description": "glTFRuntime support for FBX files",
 	"Category": "Other",

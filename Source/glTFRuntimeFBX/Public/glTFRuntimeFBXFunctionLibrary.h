@@ -1,4 +1,4 @@
-// Copyright 2023 - Roberto De Ioris
+// Copyright 2023-2024 - Roberto De Ioris
 
 #pragma once
 
@@ -13,10 +13,29 @@ struct FglTFRuntimeFBXNode
 	GENERATED_BODY()
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "glTFRuntime|FBX")
-	int64 ID;
+	FString Name;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "glTFRuntime|FBX")
-	bool bHasMesh;
+	FTransform Transform = FTransform::Identity;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "glTFRuntime|FBX")
+	bool bHasMesh = false;
+
+	uint32 Id = 0;
+};
+
+USTRUCT(BlueprintType)
+struct FglTFRuntimeFBXAnim
+{
+	GENERATED_BODY()
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "glTFRuntime|FBX")
+	FString Name;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "glTFRuntime|FBX")
+	float Duration = 0;
+
+	uint32 Id = 0;
 };
 
 /**
@@ -28,18 +47,22 @@ class GLTFRUNTIMEFBX_API UglTFRuntimeFBXFunctionLibrary : public UBlueprintFunct
 	GENERATED_BODY()
 	
 public:
+
 	UFUNCTION(BlueprintCallable, BlueprintPure, Category = "glTFRuntime|FBX")
-	static TArray<FString> GetFBXNodeNames(UglTFRuntimeAsset* Asset);
+	static FglTFRuntimeFBXNode GetFBXRootNode(UglTFRuntimeAsset* Asset);
 
 	UFUNCTION(BlueprintCallable, BlueprintPure, Category = "glTFRuntime|FBX")
 	static TArray<FglTFRuntimeFBXNode> GetFBXNodes(UglTFRuntimeAsset* Asset);
 
 	UFUNCTION(BlueprintCallable, BlueprintPure, Category = "glTFRuntime|FBX")
-	static TArray<int64> GetFBXNodeIDs(UglTFRuntimeAsset* Asset);
+	static TArray<FglTFRuntimeFBXNode> GetFBXNodeChildren(UglTFRuntimeAsset* Asset, const FglTFRuntimeFBXNode& FBXNode);
+
+	UFUNCTION(BlueprintCallable, BlueprintPure, Category = "glTFRuntime|FBX")
+	static TArray<FglTFRuntimeFBXAnim> GetFBXAnimations(UglTFRuntimeAsset* Asset);
 
 	UFUNCTION(BlueprintCallable, meta = (AdvancedDisplay = "MaterialsConfig", AutoCreateRefTerm = "MaterialsConfig"), Category = "glTFRuntime|FBX")
-	static bool LoadFBXAsRuntimeLODByNode(UglTFRuntimeAsset* Asset, const FglTFRuntimeFBXNode& Node, FglTFRuntimeMeshLOD& RuntimeLOD, const FglTFRuntimeMaterialsConfig& MaterialsConfig);
+	static bool LoadFBXAsRuntimeLODByNode(UglTFRuntimeAsset* Asset, const FglTFRuntimeFBXNode& FBXNode, FglTFRuntimeMeshLOD& RuntimeLOD, const FglTFRuntimeMaterialsConfig& MaterialsConfig);
 
-	UFUNCTION(BlueprintCallable, meta = (AdvancedDisplay = "MaterialsConfig", AutoCreateRefTerm = "MaterialsConfig"), Category = "glTFRuntime|FBX")
-	static bool LoadFBXAsRuntimeLODByNodeId(UglTFRuntimeAsset* Asset, const int64 NodeId, FglTFRuntimeMeshLOD& RuntimeLOD, const FglTFRuntimeMaterialsConfig& MaterialsConfig);
+	UFUNCTION(BlueprintCallable, meta = (AdvancedDisplay = "SkeletalAnimationConfig", AutoCreateRefTerm = "SkeletalAnimationConfig"), Category = "glTFRuntime|FBX")
+	static UAnimSequence* LoadFBXAnimAsSkeletalMeshAnimation(UglTFRuntimeAsset* Asset, const FglTFRuntimeFBXAnim& FBXAnim, const FglTFRuntimeFBXNode& FBXNode, USkeletalMesh* SkeletalMesh, const FglTFRuntimeSkeletalAnimationConfig& SkeletalAnimationConfig);
 };
