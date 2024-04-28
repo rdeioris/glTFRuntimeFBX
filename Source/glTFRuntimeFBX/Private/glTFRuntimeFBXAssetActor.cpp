@@ -60,37 +60,60 @@ void AglTFRuntimeFBXAssetActor::ProcessNode(USceneComponent* CurrentParentCompon
 	USceneComponent* SceneComponent = nullptr;
 	if (FBXNode.bHasMesh)
 	{
-		USkeletalMeshComponent* NewSkeletalMeshComponent = NewObject<USkeletalMeshComponent>(this, GetSafeNodeName<USkeletalMeshComponent>(FBXNode));
 		FglTFRuntimeMeshLOD LOD;
-		if (UglTFRuntimeFBXFunctionLibrary::LoadFBXAsRuntimeLODByNode(Asset, FBXNode, LOD, SkeletalMeshConfig.MaterialsConfig))
+		if (UglTFRuntimeFBXFunctionLibrary::LoadFBXAsRuntimeLODByNode(Asset, FBXNode, LOD, StaticMeshConfig.MaterialsConfig, SkeletalMeshConfig.MaterialsConfig))
 		{
-			USkeletalMesh* SkeletalMesh = Asset->LoadSkeletalMeshFromRuntimeLODs({ LOD }, -1, SkeletalMeshConfig);
-			if (SkeletalMesh)
+			if (LOD.Skeleton.Num() > 0)
 			{
-				NewSkeletalMeshComponent->SetSkeletalMesh(SkeletalMesh);
-
-				if (FBXAnim.Duration > 0)
+				USkeletalMeshComponent* NewSkeletalMeshComponent = NewObject<USkeletalMeshComponent>(this, GetSafeNodeName<USkeletalMeshComponent>(FBXNode));
+				USkeletalMesh* SkeletalMesh = Asset->LoadSkeletalMeshFromRuntimeLODs({ LOD }, -1, SkeletalMeshConfig);
+				if (SkeletalMesh)
 				{
-					UAnimSequence* NewAnimSequence = UglTFRuntimeFBXFunctionLibrary::LoadFBXAnimAsSkeletalMeshAnimation(Asset, FBXAnim, FBXNode, SkeletalMesh, SkeletalAnimationConfig);
-					if (NewAnimSequence)
+					NewSkeletalMeshComponent->SetSkeletalMesh(SkeletalMesh);
+
+					if (FBXAnim.Duration > 0)
 					{
-						NewSkeletalMeshComponent->AnimationData.AnimToPlay = NewAnimSequence;
-						NewSkeletalMeshComponent->AnimationData.bSavedLooping = true;
-						NewSkeletalMeshComponent->AnimationData.bSavedPlaying = true;
-						NewSkeletalMeshComponent->SetAnimationMode(EAnimationMode::AnimationSingleNode);
+						UAnimSequence* NewAnimSequence = UglTFRuntimeFBXFunctionLibrary::LoadFBXAnimAsSkeletalMeshAnimation(Asset, FBXAnim, FBXNode, SkeletalMesh, SkeletalAnimationConfig);
+						if (NewAnimSequence)
+						{
+							NewSkeletalMeshComponent->AnimationData.AnimToPlay = NewAnimSequence;
+							NewSkeletalMeshComponent->AnimationData.bSavedLooping = true;
+							NewSkeletalMeshComponent->AnimationData.bSavedPlaying = true;
+							NewSkeletalMeshComponent->SetAnimationMode(EAnimationMode::AnimationSingleNode);
+						}
 					}
 				}
+				SceneComponent = NewSkeletalMeshComponent;
+			}
+			else
+			{
+				UStaticMeshComponent* NewStaticMeshComponent = NewObject<UStaticMeshComponent>(this, GetSafeNodeName<UStaticMeshComponent>(FBXNode));
+				UStaticMesh* StaticMesh = Asset->LoadStaticMeshFromRuntimeLODs({ LOD }, StaticMeshConfig);
+				if (StaticMesh)
+				{
+					NewStaticMeshComponent->SetStaticMesh(StaticMesh);
+				}
+				SceneComponent = NewStaticMeshComponent;
 			}
 		}
-		SceneComponent = NewSkeletalMeshComponent;
 	}
 	else
 	{
 		SceneComponent = NewObject<USceneComponent>(this, GetSafeNodeName<USceneComponent>(FBXNode));
 	}
-	SceneComponent->SetupAttachment(CurrentParentComponent);
+
+	// skeletal meshes have the node transform baked in
+	if (SceneComponent->IsA<USkeletalMeshComponent>())
+	{
+		SceneComponent->SetupAttachment(GetRootComponent());
+	}
+	else
+	{
+		SceneComponent->SetupAttachment(CurrentParentComponent);
+		SceneComponent->SetRelativeTransform(FBXNode.Transform);
+	}
 	SceneComponent->RegisterComponent();
-	SceneComponent->SetRelativeTransform(FBXNode.Transform);
+	
 	AddInstanceComponent(SceneComponent);
 
 	for (const FglTFRuntimeFBXNode& ChildNode : UglTFRuntimeFBXFunctionLibrary::GetFBXNodeChildren(Asset, FBXNode))

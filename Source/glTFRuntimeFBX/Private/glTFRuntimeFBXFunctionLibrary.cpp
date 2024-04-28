@@ -34,20 +34,74 @@ namespace glTFRuntimeFBX
 		return Asset->GetParser()->TransformTransform(Transform);
 	}
 
-	void FillSkeleton(UglTFRuntimeAsset* Asset, ufbx_node* Node, const int32 ParentIndex, TArray<FglTFRuntimeBone>& Skeleton, TMap<FString, int32>& BonesMap, TArray<ufbx_node*>& DiscoveredBones)
+	void FillSkeleton(UglTFRuntimeAsset* Asset, ufbx_skin_deformer* Skin, ufbx_node* Node, const int32 ParentIndex, TArray<FglTFRuntimeBone>& Skeleton, TMap<FString, int32>& BonesMap)
 	{
 		const int32 NewIndex = Skeleton.AddDefaulted();
 		Skeleton[NewIndex].BoneName = UTF8_TO_TCHAR(Node->name.data);
 		Skeleton[NewIndex].ParentIndex = ParentIndex;
-		Skeleton[NewIndex].Transform = glTFRuntimeFBX::GetTransform(Asset, Node->local_transform);
+
+		bool bHasBone = false;
+
+		for (int32 ClusterIndex = 0; ClusterIndex < Skin->clusters.count; ClusterIndex++)
+		{
+			if (Skin->clusters.data[ClusterIndex]->bone_node == Node)
+			{
+				ufbx_matrix BoneMatrix = Skin->clusters.data[ClusterIndex]->bind_to_world;
+				if (ParentIndex > INDEX_NONE)
+				{
+					bool bFound = false;
+					// now find the parent
+					for (int32 ParentClusterIndex = 0; ParentClusterIndex < Skin->clusters.count; ParentClusterIndex++)
+					{
+						if (Skin->clusters.data[ParentClusterIndex]->bone_node == Skin->clusters.data[ClusterIndex]->bone_node->parent)
+						{
+							ufbx_matrix ParentBoneInverseMatrix = ufbx_matrix_invert(&Skin->clusters.data[ParentClusterIndex]->bind_to_world);
+							BoneMatrix = ufbx_matrix_mul(&ParentBoneInverseMatrix, &BoneMatrix);
+							bFound = true;
+							break;
+						}
+					}
+
+					if (!bFound)
+					{
+						ufbx_matrix ParentBoneInverseMatrix = ufbx_matrix_invert(&Skin->clusters.data[ClusterIndex]->bone_node->parent->node_to_world);
+						BoneMatrix = ufbx_matrix_mul(&ParentBoneInverseMatrix, &BoneMatrix);
+					}
+				}
+				else
+				{
+					//ufbx_matrix LocalMatrix = ufbx_transform_to_matrix(&Skin->clusters.data[ClusterIndex]->bone_node->parent->node_to_world);
+					ufbx_matrix ParentBoneInverseMatrix = ufbx_matrix_invert(&Skin->clusters.data[ClusterIndex]->bone_node->parent->node_to_world);
+					BoneMatrix = ufbx_matrix_mul(&ParentBoneInverseMatrix, &BoneMatrix);
+					//BoneMatrix = ufbx_matrix_mul(&LocalMatrix, &BoneMatrix);
+				}
+
+				Skeleton[NewIndex].Transform = glTFRuntimeFBX::GetTransform(Asset, ufbx_matrix_to_transform(&BoneMatrix));
+				bHasBone = true;
+				break;
+			}
+		}
+
+		//#if 0
+		if (!bHasBone)
+		{
+			if (ParentIndex > INDEX_NONE)
+			{
+				Skeleton[NewIndex].Transform = glTFRuntimeFBX::GetTransform(Asset, Node->local_transform);
+			}
+			else
+			{
+				ufbx_transform LocalMatrix = ufbx_matrix_to_transform(&Node->node_to_world);
+				Skeleton[NewIndex].Transform = glTFRuntimeFBX::GetTransform(Asset, LocalMatrix);
+			}
+		}
+		//#endif
 
 		BonesMap.Add(Skeleton[NewIndex].BoneName, NewIndex);
 
-		DiscoveredBones.Add(Node);
-
 		for (ufbx_node* Child : Node->children)
 		{
-			FillSkeleton(Asset, Child, NewIndex, Skeleton, BonesMap, DiscoveredBones);
+			FillSkeleton(Asset, Skin, Child, NewIndex, Skeleton, BonesMap);
 		}
 	}
 
@@ -77,8 +131,6 @@ namespace glTFRuntimeFBX
 
 		Asset->GetParser()->PluginsCacheData.Add("FBX", RuntimeFBXCacheData);
 
-		TArray64<uint8>& Blob = Asset->GetParser()->GetBlob();
-
 		ufbx_load_opts Options = {};
 		Options.target_axes.right = UFBX_COORDINATE_AXIS_POSITIVE_X;
 		Options.target_axes.up = UFBX_COORDINATE_AXIS_POSITIVE_Y;
@@ -87,7 +139,33 @@ namespace glTFRuntimeFBX
 		Options.space_conversion = UFBX_SPACE_CONVERSION_MODIFY_GEOMETRY;
 
 		ufbx_error Error;
-		RuntimeFBXCacheData->Scene = ufbx_load_memory(Blob.GetData(), Blob.Num(), &Options, &Error);
+
+		if (Asset->IsArchive())
+		{
+			TArray64<uint8> ArchiveBlob;
+			for (const FString& Name : Asset->GetArchiveItems())
+			{
+				if (Name.EndsWith(".fbx"))
+				{
+					if (!Asset->GetParser()->GetBlobByName(Name, ArchiveBlob))
+					{
+						return nullptr;
+					}
+
+					break;
+				}
+			}
+
+			if (ArchiveBlob.Num() > 0)
+			{
+				RuntimeFBXCacheData->Scene = ufbx_load_memory(ArchiveBlob.GetData(), ArchiveBlob.Num(), &Options, &Error);
+			}
+		}
+		else
+		{
+			TArray64<uint8>& Blob = Asset->GetParser()->GetBlob();
+			RuntimeFBXCacheData->Scene = ufbx_load_memory(Blob.GetData(), Blob.Num(), &Options, &Error);
+		}
 
 		if (!RuntimeFBXCacheData->Scene)
 		{
@@ -105,11 +183,110 @@ namespace glTFRuntimeFBX
 
 		return RuntimeFBXCacheData;
 	}
+
+	bool LoadTexture(UglTFRuntimeAsset* Asset, ufbx_texture* Texture, TArray<FglTFRuntimeMipMap>& Mips, const bool bSRGB, const FglTFRuntimeMaterialsConfig& MaterialsConfig)
+	{
+		if (!Texture)
+		{
+			return false;
+		}
+
+		TArray64<uint8> ImageData;
+
+		if (Texture->content.size > 0)
+		{
+			ImageData.Append(reinterpret_cast<const uint8*>(Texture->content.data), Texture->content.size);
+		}
+		else
+		{
+			if (Texture->filename.length > 0)
+			{
+				const FString TextureFilename = FPaths::GetCleanFilename(UTF8_TO_TCHAR(Texture->filename.data));
+				for (const FString& Name : Asset->GetArchiveItems())
+				{
+					const FString CleanedName = FPaths::GetCleanFilename(Name);
+					if (CleanedName == TextureFilename || CleanedName == TextureFilename.Replace(TEXT(" "), TEXT("_")))
+					{
+						if (!Asset->GetParser()->GetBlobByName(Name, ImageData))
+						{
+							return false;
+						}
+
+						break;
+					}
+				}
+			}
+
+			// fallback to absolute
+			if (ImageData.Num() == 0)
+			{
+				if (Texture->absolute_filename.length > 0)
+				{
+					const FString TextureFilename = FPaths::GetCleanFilename(UTF8_TO_TCHAR(Texture->absolute_filename.data));
+					for (const FString& Name : Asset->GetArchiveItems())
+					{
+						const FString CleanedName = FPaths::GetCleanFilename(Name);
+						if (CleanedName == TextureFilename || CleanedName == TextureFilename.Replace(TEXT(" "), TEXT("_")))
+						{
+							if (!Asset->GetParser()->GetBlobByName(Name, ImageData))
+							{
+								return false;
+							}
+
+							break;
+						}
+					}
+				}
+			}
+		}
+
+		if (ImageData.Num() == 0)
+		{
+			return false;
+		}
+
+		return Asset->GetParser()->LoadBlobToMips(ImageData, Mips, bSRGB, MaterialsConfig);
+	}
+
+	UMaterialInterface* LoadMaterial(UglTFRuntimeAsset* Asset, ufbx_material* MeshMaterial, const FglTFRuntimeMaterialsConfig& MaterialsConfig)
+	{
+		FglTFRuntimeMaterial Material;
+
+		LoadTexture(Asset, MeshMaterial->pbr.base_color.texture, Material.BaseColorTextureMips, true, MaterialsConfig);
+
+		if (MeshMaterial->pbr.base_color.has_value)
+		{
+			Material.BaseColorFactor = FLinearColor(MeshMaterial->pbr.base_color.value_vec4.x,
+				MeshMaterial->pbr.base_color.value_vec4.y,
+				MeshMaterial->pbr.base_color.value_vec4.z,
+				MeshMaterial->pbr.base_color.value_vec4.w);
+			Material.bHasBaseColorFactor = true;
+		}
+
+		LoadTexture(Asset, MeshMaterial->pbr.normal_map.texture, Material.NormalTextureMips, false, MaterialsConfig);
+
+		if (MeshMaterial->pbr.metalness.has_value)
+		{
+			Material.MetallicFactor = MeshMaterial->pbr.metalness.value_real;
+			Material.bHasMetallicFactor = true;
+		}
+
+		LoadTexture(Asset, MeshMaterial->pbr.metalness.texture, Material.MetallicRoughnessTextureMips, false, MaterialsConfig);
+
+		LoadTexture(Asset, MeshMaterial->pbr.emission_color.texture, Material.EmissiveTextureMips, true, MaterialsConfig);
+
+		return Asset->GetParser()->BuildMaterial(-1, UTF8_TO_TCHAR(MeshMaterial->name.data), Material, MaterialsConfig, false);
+	}
 }
 
 TArray<FglTFRuntimeFBXNode> UglTFRuntimeFBXFunctionLibrary::GetFBXNodes(UglTFRuntimeAsset* Asset)
 {
 	TArray<FglTFRuntimeFBXNode> Nodes;
+
+	if (!Asset)
+	{
+		return Nodes;
+	}
 
 	TSharedPtr<FglTFRuntimeFBXCacheData> RuntimeFBXCacheData = nullptr;
 	{
@@ -139,6 +316,11 @@ FglTFRuntimeFBXNode UglTFRuntimeFBXFunctionLibrary::GetFBXRootNode(UglTFRuntimeA
 {
 	FglTFRuntimeFBXNode FBXNode;
 
+	if (!Asset)
+	{
+		return FBXNode;
+	}
+
 	TSharedPtr<FglTFRuntimeFBXCacheData> RuntimeFBXCacheData = nullptr;
 	{
 		FScopeLock Lock(&(Asset->GetParser()->PluginsCacheDataLock));
@@ -158,6 +340,11 @@ FglTFRuntimeFBXNode UglTFRuntimeFBXFunctionLibrary::GetFBXRootNode(UglTFRuntimeA
 TArray<FglTFRuntimeFBXNode> UglTFRuntimeFBXFunctionLibrary::GetFBXNodeChildren(UglTFRuntimeAsset* Asset, const FglTFRuntimeFBXNode& FBXNode)
 {
 	TArray<FglTFRuntimeFBXNode> Nodes;
+
+	if (!Asset)
+	{
+		return Nodes;
+	}
 
 	TSharedPtr<FglTFRuntimeFBXCacheData> RuntimeFBXCacheData = nullptr;
 	{
@@ -190,6 +377,11 @@ TArray<FglTFRuntimeFBXAnim> UglTFRuntimeFBXFunctionLibrary::GetFBXAnimations(Ugl
 {
 	TArray<FglTFRuntimeFBXAnim> Anims;
 
+	if (!Asset)
+	{
+		return Anims;
+	}
+
 	TSharedPtr<FglTFRuntimeFBXCacheData> RuntimeFBXCacheData = nullptr;
 	{
 		FScopeLock Lock(&(Asset->GetParser()->PluginsCacheDataLock));
@@ -209,8 +401,6 @@ TArray<FglTFRuntimeFBXAnim> UglTFRuntimeFBXFunctionLibrary::GetFBXAnimations(Ugl
 		FBXAnim.Id = AnimStack->element_id;
 		FBXAnim.Name = UTF8_TO_TCHAR(AnimStack->name.data);
 		FBXAnim.Duration = AnimStack->time_end - AnimStack->time_begin;
-
-		UE_LOG(LogTemp, Error, TEXT("%s %f"), *FBXAnim.Name, AnimStack->time_begin);
 
 		Anims.Add(MoveTemp(FBXAnim));
 	}
@@ -284,7 +474,6 @@ UAnimSequence* UglTFRuntimeFBXFunctionLibrary::LoadFBXAnimAsSkeletalMeshAnimatio
 	for (int32 ClusterIndex = 0; ClusterIndex < Skin->clusters.count; ClusterIndex++)
 	{
 		ufbx_skin_cluster* Cluster = Skin->clusters.data[ClusterIndex];
-		//UE_LOG(LogTemp, Error, TEXT("%s"), UTF8_TO_TCHAR(Cluster->bone_node->name.data));
 
 		const FString BoneName = UTF8_TO_TCHAR(Cluster->bone_node->name.data);
 
@@ -305,16 +494,10 @@ UAnimSequence* UglTFRuntimeFBXFunctionLibrary::LoadFBXAnimAsSkeletalMeshAnimatio
 		}
 	}
 
-	/*for (ufbx_node* FbxNode : AnimationNodes)
-	{
-		FTransform Transform = glTFRuntimeFBX::GetTransform(Asset, ufbx_evaluate_transform(AnimStack->anim, FbxNode, 0.1));
-		UE_LOG(LogTemp, Error, TEXT("%s = %s"), UTF8_TO_TCHAR(FbxNode->name.data), *Transform.ToString());
-	}*/
-
 	return Asset->GetParser()->LoadSkeletalAnimationFromTracksAndMorphTargets(SkeletalMesh, PosesMap, MorphTargetCurves, Duration, SkeletalAnimationConfig);
 }
 
-bool UglTFRuntimeFBXFunctionLibrary::LoadFBXAsRuntimeLODByNode(UglTFRuntimeAsset* Asset, const FglTFRuntimeFBXNode& FBXNode, FglTFRuntimeMeshLOD& RuntimeLOD, const FglTFRuntimeMaterialsConfig& MaterialsConfig)
+bool UglTFRuntimeFBXFunctionLibrary::LoadFBXAsRuntimeLODByNode(UglTFRuntimeAsset* Asset, const FglTFRuntimeFBXNode& FBXNode, FglTFRuntimeMeshLOD& RuntimeLOD, const FglTFRuntimeMaterialsConfig& StaticMeshMaterialsConfig, const FglTFRuntimeMaterialsConfig& SkeletalMeshMaterialsConfig)
 {
 	if (!Asset)
 	{
@@ -332,179 +515,214 @@ bool UglTFRuntimeFBXFunctionLibrary::LoadFBXAsRuntimeLODByNode(UglTFRuntimeAsset
 		}
 	}
 
-	const uint32 NodeId = FBXNode.Id;
+	if (!RuntimeFBXCacheData->NodesMap.Contains(FBXNode.Id))
+	{
+		return false;
+	}
 
 	RuntimeLOD.Empty();
 
-	bool bSuccess = false;
+	ufbx_node* Node = RuntimeFBXCacheData->NodesMap[FBXNode.Id];
 
-	for (int32 NodeIndex = 0; NodeIndex < RuntimeFBXCacheData->Scene->nodes.count; NodeIndex++)
+	ufbx_mesh* Mesh = Node->mesh;
+	if (!Mesh)
 	{
-		ufbx_node* Node = RuntimeFBXCacheData->Scene->nodes.data[NodeIndex];
+		return false;
+	}
 
-		if (Node->element_id == NodeId)
+	TMap<uint32, TArray<TPair<int32, float>>> JointsWeightsMap;
+
+	const FglTFRuntimeMaterialsConfig* MaterialsConfig = &StaticMeshMaterialsConfig;
+
+	int32 MaxBoneInfluences = 4;
+	int32 JointsWeightsGroups = 1;
+
+	for (uint32 BlendDeformerIndex = 0; BlendDeformerIndex < Mesh->blend_deformers.count; BlendDeformerIndex++)
+	{
+		UE_LOG(LogTemp, Error, TEXT("BlendDeformer %s"), UTF8_TO_TCHAR(Mesh->blend_deformers.data[BlendDeformerIndex]->name.data));
+		for (uint32 BlendDeformerChannelIndex = 0; BlendDeformerChannelIndex < Mesh->blend_deformers.data[BlendDeformerIndex]->channels.count; BlendDeformerChannelIndex++)
 		{
-			ufbx_mesh* Mesh = Node->mesh;
-			if (!Mesh)
-			{
-				break;
-			}
-
-			UE_LOG(LogTemp, Error, TEXT("Transform of %s: %s"), UTF8_TO_TCHAR(Node->name.data), *glTFRuntimeFBX::GetTransform(Asset, Node->local_transform).ToString());
-
-			TMap<uint32, TMap<int32, float>> JointsWeightsMap;
-
-			TArray<ufbx_node*> AnimationNodes;
-
-			if (Mesh->skin_deformers.count > 0)
-			{
-				UE_LOG(LogTemp, Error, TEXT("Has skeleton!"));
-
-				ufbx_skin_deformer* Skin = Mesh->skin_deformers.data[0];
-
-				TArray<FglTFRuntimeBone>& Skeleton = RuntimeLOD.Skeleton;
-
-				TSet<FString> Bones;
-
-				ufbx_node* RootNode = nullptr;
-
-				TMap<FString, int32> BonesMap;
-
-				FString RootBoneName;
-
-				for (int32 ClusterIndex = 0; ClusterIndex < Skin->clusters.count; ClusterIndex++)
-				{
-					ufbx_skin_cluster* Cluster = Skin->clusters.data[ClusterIndex];
-
-					if (!RootNode)
-					{
-						RootNode = Cluster->bone_node;
-
-						ufbx_node* Parent = RootNode->parent;
-						while (Parent && !Parent->is_root)
-						{
-							RootNode = Parent;
-
-							Parent = Parent->parent;
-						}
-
-						glTFRuntimeFBX::FillSkeleton(Asset, RootNode, INDEX_NONE, Skeleton, BonesMap, AnimationNodes);
-					}
-
-					const FString BoneName = UTF8_TO_TCHAR(Cluster->bone_node->name.data);
-
-					if (BonesMap.Contains(BoneName))
-					{
-						const int32 BoneIndex = BonesMap[BoneName];
-
-						for (uint32 VertexIndex = 0; VertexIndex < Cluster->vertices.count; VertexIndex++)
-						{
-							const uint32 VertexIndexValue = Cluster->vertices.data[VertexIndex];
-							const float VertexWeight = Cluster->weights.data[VertexIndex];
-							if (!JointsWeightsMap.Contains(VertexIndexValue))
-							{
-								JointsWeightsMap.Add(VertexIndexValue);
-							}
-
-							JointsWeightsMap[VertexIndexValue].Add(BoneIndex, VertexWeight);
-						}
-					}
-				}
-
-			}
-
-
-			uint32 NumTriangleIndices = Mesh->max_face_triangles * 3;
-			TArray<uint32> TriangleIndices;
-			TriangleIndices.AddUninitialized(NumTriangleIndices);
-
-			for (uint32 PrimitiveIndex = 0; PrimitiveIndex < Node->materials.count; PrimitiveIndex++)
-			{
-				ufbx_material* MeshMaterial = Mesh->materials.data[PrimitiveIndex];
-
-				FglTFRuntimePrimitive Primitive;
-				FglTFRuntimeMaterial Material;
-				Material.BaseColorFactor = FLinearColor(MeshMaterial->pbr.base_factor.value_vec4.x,
-					MeshMaterial->pbr.base_factor.value_vec4.y,
-					MeshMaterial->pbr.base_factor.value_vec4.z,
-					MeshMaterial->pbr.base_factor.value_vec4.w);
-
-				if (MeshMaterial->pbr.base_color.texture)
-				{
-					TArray64<uint8> ImageData;
-					ImageData.Append(reinterpret_cast<const uint8*>(MeshMaterial->pbr.base_color.texture->content.data), MeshMaterial->pbr.base_color.texture->content.size);
-					Asset->GetParser()->LoadBlobToMips(ImageData, Material.BaseColorTextureMips, true, MaterialsConfig);
-				}
-
-				if (MeshMaterial->pbr.normal_map.texture)
-				{
-					TArray64<uint8> ImageData;
-					ImageData.Append(reinterpret_cast<const uint8*>(MeshMaterial->pbr.normal_map.texture->content.data), MeshMaterial->pbr.normal_map.texture->content.size);
-					Asset->GetParser()->LoadBlobToMips(ImageData, Material.NormalTextureMips, false, MaterialsConfig);
-				}
-
-				Primitive.Material = Primitive.Material = Asset->GetParser()->BuildMaterial(-1, UTF8_TO_TCHAR(MeshMaterial->name.data), Material, MaterialsConfig, false);
-
-				Primitive.Joints.AddDefaulted();
-				Primitive.Weights.AddDefaulted();
-				Primitive.UVs.AddDefaulted();
-
-				for (uint32 FaceIndex = 0; FaceIndex < Mesh->num_faces; FaceIndex++)
-				{
-					if (Mesh->face_material.data[FaceIndex] == PrimitiveIndex)
-					{
-						ufbx_face Face = Mesh->faces.data[FaceIndex];
-						uint32 NumTriangles = ufbx_triangulate_face(TriangleIndices.GetData(), NumTriangleIndices, Mesh, Face);
-
-						for (uint32 VertexIndex = 0; VertexIndex < NumTriangles * 3; VertexIndex++)
-						{
-							const uint32 Index = TriangleIndices[VertexIndex];
-							if (!JointsWeightsMap.Contains(Mesh->vertex_indices.data[Index]))
-							{
-								UE_LOG(LogTemp, Error, TEXT("Index %u not found!"), Index);
-
-							}
-							else
-							{
-								const TMap<int32, float>& JointsWeights = JointsWeightsMap[Mesh->vertex_indices.data[Index]];
-								int32 BoneIndex = 0;
-								FglTFRuntimeUInt16Vector4 Joints;
-								FVector4 Weights(0, 0, 0, 0);
-								for (const TPair<int32, float>& Pair : JointsWeights)
-								{
-									//UE_LOG(LogTemp, Error, TEXT("Index: %u/%u Bone: %u Weight: %f"), Index, BoneIndex, Pair.Key, Pair.Value);
-									Joints[BoneIndex] = Pair.Key;
-									Weights[BoneIndex] = Pair.Value;
-									BoneIndex++;
-									if (BoneIndex > 3)
-									{
-										break;
-									}
-								}
-								Primitive.Joints[0].Add(Joints);
-								Primitive.Weights[0].Add(Weights);
-							}
-							ufbx_vec3 Position = ufbx_get_vertex_vec3(&Mesh->vertex_position, Index);
-							ufbx_vec3 Normal = ufbx_get_vertex_vec3(&Mesh->vertex_normal, Index);
-							ufbx_vec2 UV = Mesh->vertex_uv.exists ? ufbx_get_vertex_vec2(&Mesh->vertex_uv, Index) : ufbx_vec2{ 0 };
-
-							Primitive.Positions.Add(Asset->GetParser()->TransformPosition(FVector(Position.x, Position.y, Position.z)));
-							Primitive.Normals.Add(Asset->GetParser()->TransformVector(FVector(Normal.x, Normal.y, Normal.z)));
-							Primitive.UVs[0].Add(FVector2D(UV.x, 1 - UV.y));
-
-							Primitive.Indices.Add(Primitive.Positions.Num() - 1);
-						}
-					}
-				}
-
-				RuntimeLOD.Primitives.Add(MoveTemp(Primitive));
-			}
-
-			bSuccess = true;
-
-			break;
+			UE_LOG(LogTemp, Warning, TEXT("BlendDeformerChannel %s [%d]")
+				, UTF8_TO_TCHAR(Mesh->blend_deformers.data[BlendDeformerIndex]->channels.data[BlendDeformerChannelIndex]->name.data)
+				, Mesh->blend_deformers.data[BlendDeformerIndex]->channels.data[BlendDeformerChannelIndex]->target_shape->num_offsets);
 		}
 	}
 
-	return bSuccess;
+	// skeletal mesh ?
+	if (Mesh->skin_deformers.count > 0)
+	{
+		ufbx_skin_deformer* Skin = Mesh->skin_deformers.data[0];
+
+		TArray<FglTFRuntimeBone>& Skeleton = RuntimeLOD.Skeleton;
+
+		TSet<FString> Bones;
+
+		ufbx_node* RootNode = nullptr;
+
+		TMap<FString, int32> BonesMap;
+
+		for (int32 ClusterIndex = 0; ClusterIndex < Skin->clusters.count; ClusterIndex++)
+		{
+			ufbx_skin_cluster* Cluster = Skin->clusters.data[ClusterIndex];
+
+			if (!RootNode)
+			{
+				RootNode = Cluster->bone_node;
+				ufbx_node* Parent = RootNode->parent;
+				while (Parent && !Parent->is_root)
+				{
+
+					RootNode = Parent;
+
+					Parent = Parent->parent;
+				}
+
+				glTFRuntimeFBX::FillSkeleton(Asset, Skin, RootNode, INDEX_NONE, Skeleton, BonesMap);
+			}
+
+			const FString BoneName = UTF8_TO_TCHAR(Cluster->bone_node->name.data);
+
+			if (BonesMap.Contains(BoneName))
+			{
+				const int32 BoneIndex = BonesMap[BoneName];
+
+				for (uint32 VertexIndex = 0; VertexIndex < Cluster->vertices.count; VertexIndex++)
+				{
+					const uint32 VertexIndexValue = Cluster->vertices.data[VertexIndex];
+					const float VertexWeight = Cluster->weights.data[VertexIndex];
+					if (!JointsWeightsMap.Contains(VertexIndexValue))
+					{
+						JointsWeightsMap.Add(VertexIndexValue);
+					}
+
+					JointsWeightsMap[VertexIndexValue].Add({ BoneIndex, VertexWeight });
+				}
+			}
+		}
+
+		for (const TPair<uint32, TArray<TPair<int32, float>>>& Pair : JointsWeightsMap)
+		{
+			if (Pair.Value.Num() > MaxBoneInfluences)
+			{
+				MaxBoneInfluences = Pair.Value.Num();
+			}
+		}
+
+		JointsWeightsGroups = MaxBoneInfluences / 4;
+		if (MaxBoneInfluences % 4 != 0)
+		{
+			JointsWeightsGroups++;
+		}
+	}
+
+	uint32 NumTriangleIndices = Mesh->max_face_triangles * 3;
+	TArray<uint32> TriangleIndices;
+	TriangleIndices.AddUninitialized(NumTriangleIndices);
+
+	RuntimeLOD.Primitives.AddDefaulted(Node->materials.count);
+
+	const bool bIsSkeletal = JointsWeightsMap.Num() > 0;
+
+	if (bIsSkeletal)
+	{
+		MaterialsConfig = &SkeletalMeshMaterialsConfig;
+	}
+
+	for (uint32 PrimitiveIndex = 0; PrimitiveIndex < Node->materials.count; PrimitiveIndex++)
+	{
+		ufbx_material* MeshMaterial = Mesh->materials.data[PrimitiveIndex];
+
+		FglTFRuntimePrimitive& Primitive = RuntimeLOD.Primitives[PrimitiveIndex];
+
+		if (!MaterialsConfig->bSkipLoad)
+		{
+			Primitive.Material = glTFRuntimeFBX::LoadMaterial(Asset, MeshMaterial, *MaterialsConfig);
+		}
+
+		if (bIsSkeletal)
+		{
+			for (int32 JWIndex = 0; JWIndex < JointsWeightsGroups; JWIndex++)
+			{
+				Primitive.Joints.AddDefaulted();
+				Primitive.Weights.AddDefaulted();
+			}
+		}
+
+		if (Mesh->vertex_uv.exists)
+		{
+			Primitive.UVs.AddDefaulted();
+		}
+	}
+
+	for (uint32 FaceIndex = 0; FaceIndex < Mesh->num_faces; FaceIndex++)
+	{
+		const uint32 MaterialIndex = Mesh->face_material.data[FaceIndex];
+		if (RuntimeLOD.Primitives.IsValidIndex(MaterialIndex))
+		{
+			FglTFRuntimePrimitive& Primitive = RuntimeLOD.Primitives[MaterialIndex];
+
+			ufbx_face Face = Mesh->faces.data[FaceIndex];
+			uint32 NumTriangles = ufbx_triangulate_face(TriangleIndices.GetData(), NumTriangleIndices, Mesh, Face);
+
+			for (uint32 VertexIndex = 0; VertexIndex < NumTriangles * 3; VertexIndex++)
+			{
+				const uint32 Index = TriangleIndices[VertexIndex];
+
+				if (bIsSkeletal)
+				{
+					for (int32 JWIndex = 0; JWIndex < JointsWeightsGroups; JWIndex++)
+					{
+						Primitive.Joints[JWIndex].AddZeroed();
+						Primitive.Weights[JWIndex].AddZeroed();
+					}
+
+					if (JointsWeightsMap.Contains(Mesh->vertex_indices.data[Index]))
+					{
+						const TArray<TPair<int32, float>>& JointsWeights = JointsWeightsMap[Mesh->vertex_indices.data[Index]];
+						int32 BoneIndex = 0;
+						for (const TPair<int32, float>& Pair : JointsWeights)
+						{
+							Primitive.Joints[BoneIndex / 4].Last()[BoneIndex % 4] = Pair.Key;
+							Primitive.Weights[BoneIndex / 4].Last()[BoneIndex % 4] = Pair.Value;
+							BoneIndex++;
+						}
+					}
+				}
+
+				ufbx_vec3 Position = ufbx_get_vertex_vec3(&Mesh->vertex_position, Index);
+
+				if (bIsSkeletal)
+				{
+					Primitive.Positions.Add(glTFRuntimeFBX::GetTransform(Asset, Node->local_transform).TransformPosition(Asset->GetParser()->TransformPosition(FVector(Position.x, Position.y, Position.z))));
+				}
+				else
+				{
+					Primitive.Positions.Add(Asset->GetParser()->TransformPosition(FVector(Position.x, Position.y, Position.z)));
+				}
+
+				if (Mesh->vertex_normal.exists)
+				{
+					ufbx_vec3 Normal = ufbx_get_vertex_vec3(&Mesh->vertex_normal, Index);
+					if (bIsSkeletal)
+					{
+						Primitive.Normals.Add(glTFRuntimeFBX::GetTransform(Asset, Node->local_transform).TransformVector(Asset->GetParser()->TransformVector(FVector(Normal.x, Normal.y, Normal.z))));
+					}
+					else
+					{
+						Primitive.Normals.Add(Asset->GetParser()->TransformVector(FVector(Normal.x, Normal.y, Normal.z)));
+					}
+				}
+
+				if (Mesh->vertex_uv.exists)
+				{
+					ufbx_vec2 UV = ufbx_get_vertex_vec2(&Mesh->vertex_uv, Index);
+					Primitive.UVs[0].Add(FVector2D(UV.x, 1 - UV.y));
+				}
+
+				Primitive.Indices.Add(Primitive.Positions.Num() - 1);
+			}
+		}
+	}
+
+	return true;
 }
