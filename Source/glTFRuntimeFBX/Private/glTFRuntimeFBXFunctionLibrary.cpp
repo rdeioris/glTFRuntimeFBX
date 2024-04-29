@@ -18,6 +18,9 @@ struct FglTFRuntimeFBXCacheData : FglTFRuntimePluginCacheData
 			ufbx_free_scene(Scene);
 		}
 	}
+
+	TMap<ufbx_texture*, TStrongObjectPtr<UTexture2D>> TexturesCache;
+	FCriticalSection TexturesLock;
 };
 
 namespace glTFRuntimeFBX
@@ -166,11 +169,19 @@ namespace glTFRuntimeFBX
 		return RuntimeFBXCacheData;
 	}
 
-	bool LoadTexture(UglTFRuntimeAsset* Asset, ufbx_texture* Texture, TArray<FglTFRuntimeMipMap>& Mips, const bool bSRGB, const FglTFRuntimeMaterialsConfig& MaterialsConfig)
+	bool LoadTexture(UglTFRuntimeAsset* Asset, TSharedRef<FglTFRuntimeFBXCacheData> RuntimeFBXCacheData, ufbx_texture* Texture, UTexture2D*& TextureCache, const bool bSRGB, const FglTFRuntimeMaterialsConfig& MaterialsConfig)
 	{
 		if (!Texture)
 		{
 			return false;
+		}
+
+		FScopeLock TextureLock(&RuntimeFBXCacheData->TexturesLock);
+
+		if (RuntimeFBXCacheData->TexturesCache.Contains(Texture))
+		{
+			TextureCache = RuntimeFBXCacheData->TexturesCache[Texture].Get();
+			return true;
 		}
 
 		TArray64<uint8> ImageData;
@@ -222,10 +233,25 @@ namespace glTFRuntimeFBX
 			return false;
 		}
 
-		return Asset->GetParser()->LoadBlobToMips(ImageData, Mips, bSRGB, MaterialsConfig);
+		TArray<FglTFRuntimeMipMap> Mips;
+		if (!Asset->GetParser()->LoadBlobToMips(ImageData, Mips, bSRGB, MaterialsConfig))
+		{
+			return false;
+		}
+
+		FglTFRuntimeImagesConfig ImagesConfig = MaterialsConfig.ImagesConfig;
+		ImagesConfig.bSRGB = bSRGB;
+		TextureCache = Asset->GetParser()->BuildTexture(GetTransientPackage(), Mips, ImagesConfig, FglTFRuntimeTextureSampler());
+
+		if (TextureCache)
+		{
+			RuntimeFBXCacheData->TexturesCache.Add(Texture, TStrongObjectPtr<UTexture2D>(TextureCache));
+		}
+
+		return TextureCache != nullptr;
 	}
 
-	UMaterialInterface* LoadMaterial(UglTFRuntimeAsset* Asset, ufbx_material* MeshMaterial, const FglTFRuntimeMaterialsConfig& MaterialsConfig)
+	UMaterialInterface* LoadMaterial(UglTFRuntimeAsset* Asset, TSharedRef<FglTFRuntimeFBXCacheData> RuntimeFBXCacheData, ufbx_material* MeshMaterial, const FglTFRuntimeMaterialsConfig& MaterialsConfig)
 	{
 		FglTFRuntimeMaterial Material;
 
@@ -243,22 +269,9 @@ namespace glTFRuntimeFBX
 			}
 		}
 
-		LoadTexture(Asset, MeshMaterial->pbr.base_color.texture, Material.BaseColorTextureMips, true, MaterialsConfig);
+		LoadTexture(Asset, RuntimeFBXCacheData, MeshMaterial->pbr.base_color.texture, Material.BaseColorTextureCache, true, MaterialsConfig);
 
-		if (Material.MaterialType != EglTFRuntimeMaterialType::Translucent && Material.BaseColorTextureMips.Num() > 0 && Material.BaseColorTextureMips[0].Pixels.Num() >= 4)
-		{
-			// check for alpha
-			for (int64 PixelChannelIndex = 3; PixelChannelIndex < Material.BaseColorTextureMips[0].Pixels.Num(); PixelChannelIndex += 4)
-			{
-				if (Material.BaseColorTextureMips[0].Pixels[PixelChannelIndex] < 255)
-				{
-					Material.MaterialType = EglTFRuntimeMaterialType::Translucent;
-					break;
-				}
-			}
-		}
-
-		LoadTexture(Asset, MeshMaterial->pbr.normal_map.texture, Material.NormalTextureMips, false, MaterialsConfig);
+		LoadTexture(Asset, RuntimeFBXCacheData, MeshMaterial->pbr.normal_map.texture, Material.NormalTextureCache, false, MaterialsConfig);
 
 		if (MeshMaterial->pbr.metalness.has_value)
 		{
@@ -266,9 +279,9 @@ namespace glTFRuntimeFBX
 			Material.bHasMetallicFactor = true;
 		}
 
-		LoadTexture(Asset, MeshMaterial->pbr.metalness.texture, Material.MetallicRoughnessTextureMips, false, MaterialsConfig);
+		LoadTexture(Asset, RuntimeFBXCacheData, MeshMaterial->pbr.metalness.texture, Material.MetallicRoughnessTextureCache, false, MaterialsConfig);
 
-		LoadTexture(Asset, MeshMaterial->pbr.emission_color.texture, Material.EmissiveTextureMips, true, MaterialsConfig);
+		LoadTexture(Asset, RuntimeFBXCacheData, MeshMaterial->pbr.emission_color.texture, Material.EmissiveTextureCache, true, MaterialsConfig);
 
 		return Asset->GetParser()->BuildMaterial(-1, UTF8_TO_TCHAR(MeshMaterial->name.data), Material, MaterialsConfig, false);
 	}
@@ -637,7 +650,7 @@ bool UglTFRuntimeFBXFunctionLibrary::LoadFBXAsRuntimeLODByNode(UglTFRuntimeAsset
 
 		if (!MaterialsConfig->bSkipLoad)
 		{
-			Primitive.Material = glTFRuntimeFBX::LoadMaterial(Asset, MeshMaterial, *MaterialsConfig);
+			Primitive.Material = glTFRuntimeFBX::LoadMaterial(Asset, RuntimeFBXCacheData.ToSharedRef(), MeshMaterial, *MaterialsConfig);
 		}
 
 		if (bIsSkeletal)
