@@ -97,7 +97,8 @@ void AglTFRuntimeFBXAssetActor::ProcessNode(USceneComponent* CurrentParentCompon
 			}
 		}
 	}
-	else
+
+	if (!SceneComponent)
 	{
 		SceneComponent = NewObject<USceneComponent>(this, GetSafeNodeName<USceneComponent>(FBXNode));
 	}

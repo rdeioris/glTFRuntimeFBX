@@ -47,34 +47,26 @@ namespace glTFRuntimeFBX
 			if (Skin->clusters.data[ClusterIndex]->bone_node == Node)
 			{
 				ufbx_matrix BoneMatrix = Skin->clusters.data[ClusterIndex]->bind_to_world;
-				if (ParentIndex > INDEX_NONE)
-				{
-					bool bFound = false;
-					// now find the parent
-					for (int32 ParentClusterIndex = 0; ParentClusterIndex < Skin->clusters.count; ParentClusterIndex++)
-					{
-						if (Skin->clusters.data[ParentClusterIndex]->bone_node == Skin->clusters.data[ClusterIndex]->bone_node->parent)
-						{
-							ufbx_matrix ParentBoneInverseMatrix = ufbx_matrix_invert(&Skin->clusters.data[ParentClusterIndex]->bind_to_world);
-							BoneMatrix = ufbx_matrix_mul(&ParentBoneInverseMatrix, &BoneMatrix);
-							bFound = true;
-							break;
-						}
-					}
 
-					if (!bFound)
+				bool bFound = false;
+				// now find the parent
+				for (int32 ParentClusterIndex = 0; ParentClusterIndex < Skin->clusters.count; ParentClusterIndex++)
+				{
+					if (Skin->clusters.data[ParentClusterIndex]->bone_node == Skin->clusters.data[ClusterIndex]->bone_node->parent)
 					{
-						ufbx_matrix ParentBoneInverseMatrix = ufbx_matrix_invert(&Skin->clusters.data[ClusterIndex]->bone_node->parent->node_to_world);
+						ufbx_matrix ParentBoneInverseMatrix = ufbx_matrix_invert(&Skin->clusters.data[ParentClusterIndex]->bind_to_world);
 						BoneMatrix = ufbx_matrix_mul(&ParentBoneInverseMatrix, &BoneMatrix);
+						bFound = true;
+						break;
 					}
 				}
-				else
+
+				if (!bFound)
 				{
-					//ufbx_matrix LocalMatrix = ufbx_transform_to_matrix(&Skin->clusters.data[ClusterIndex]->bone_node->parent->node_to_world);
 					ufbx_matrix ParentBoneInverseMatrix = ufbx_matrix_invert(&Skin->clusters.data[ClusterIndex]->bone_node->parent->node_to_world);
 					BoneMatrix = ufbx_matrix_mul(&ParentBoneInverseMatrix, &BoneMatrix);
-					//BoneMatrix = ufbx_matrix_mul(&LocalMatrix, &BoneMatrix);
 				}
+
 
 				Skeleton[NewIndex].Transform = glTFRuntimeFBX::GetTransform(Asset, ufbx_matrix_to_transform(&BoneMatrix));
 				bHasBone = true;
@@ -82,20 +74,10 @@ namespace glTFRuntimeFBX
 			}
 		}
 
-		//#if 0
 		if (!bHasBone)
 		{
-			if (ParentIndex > INDEX_NONE)
-			{
-				Skeleton[NewIndex].Transform = glTFRuntimeFBX::GetTransform(Asset, Node->local_transform);
-			}
-			else
-			{
-				ufbx_transform LocalMatrix = ufbx_matrix_to_transform(&Node->node_to_world);
-				Skeleton[NewIndex].Transform = glTFRuntimeFBX::GetTransform(Asset, LocalMatrix);
-			}
+			Skeleton[NewIndex].Transform = glTFRuntimeFBX::GetTransform(Asset, Node->local_transform);
 		}
-		//#endif
 
 		BonesMap.Add(Skeleton[NewIndex].BoneName, NewIndex);
 
@@ -193,6 +175,21 @@ namespace glTFRuntimeFBX
 
 		TArray64<uint8> ImageData;
 
+		auto LoadTextureFromArchive = [Asset, &ImageData](ufbx_string* FilenameString) -> bool
+			{
+				const FString TextureFilename = FPaths::GetCleanFilename(UTF8_TO_TCHAR(FilenameString->data));
+				for (const FString& Name : Asset->GetArchiveItems())
+				{
+					const FString CleanedName = FPaths::GetCleanFilename(Name);
+					if (CleanedName == TextureFilename || CleanedName == TextureFilename.Replace(TEXT(" "), TEXT("_")))
+					{
+						return Asset->GetParser()->GetBlobByName(Name, ImageData);
+					}
+				}
+
+				return true;
+			};
+
 		if (Texture->content.size > 0)
 		{
 			ImageData.Append(reinterpret_cast<const uint8*>(Texture->content.data), Texture->content.size);
@@ -201,19 +198,9 @@ namespace glTFRuntimeFBX
 		{
 			if (Texture->filename.length > 0)
 			{
-				const FString TextureFilename = FPaths::GetCleanFilename(UTF8_TO_TCHAR(Texture->filename.data));
-				for (const FString& Name : Asset->GetArchiveItems())
+				if (!LoadTextureFromArchive(&Texture->filename))
 				{
-					const FString CleanedName = FPaths::GetCleanFilename(Name);
-					if (CleanedName == TextureFilename || CleanedName == TextureFilename.Replace(TEXT(" "), TEXT("_")))
-					{
-						if (!Asset->GetParser()->GetBlobByName(Name, ImageData))
-						{
-							return false;
-						}
-
-						break;
-					}
+					return false;
 				}
 			}
 
@@ -222,19 +209,9 @@ namespace glTFRuntimeFBX
 			{
 				if (Texture->absolute_filename.length > 0)
 				{
-					const FString TextureFilename = FPaths::GetCleanFilename(UTF8_TO_TCHAR(Texture->absolute_filename.data));
-					for (const FString& Name : Asset->GetArchiveItems())
+					if (!LoadTextureFromArchive(&Texture->absolute_filename))
 					{
-						const FString CleanedName = FPaths::GetCleanFilename(Name);
-						if (CleanedName == TextureFilename || CleanedName == TextureFilename.Replace(TEXT(" "), TEXT("_")))
-						{
-							if (!Asset->GetParser()->GetBlobByName(Name, ImageData))
-							{
-								return false;
-							}
-
-							break;
-						}
+						return false;
 					}
 				}
 			}
@@ -252,8 +229,6 @@ namespace glTFRuntimeFBX
 	{
 		FglTFRuntimeMaterial Material;
 
-		LoadTexture(Asset, MeshMaterial->pbr.base_color.texture, Material.BaseColorTextureMips, true, MaterialsConfig);
-
 		if (MeshMaterial->pbr.base_color.has_value)
 		{
 			Material.BaseColorFactor = FLinearColor(MeshMaterial->pbr.base_color.value_vec4.x,
@@ -261,6 +236,26 @@ namespace glTFRuntimeFBX
 				MeshMaterial->pbr.base_color.value_vec4.z,
 				MeshMaterial->pbr.base_color.value_vec4.w);
 			Material.bHasBaseColorFactor = true;
+
+			if (MeshMaterial->pbr.base_color.value_vec4.w < 1.0)
+			{
+				Material.MaterialType = EglTFRuntimeMaterialType::Translucent;
+			}
+		}
+
+		LoadTexture(Asset, MeshMaterial->pbr.base_color.texture, Material.BaseColorTextureMips, true, MaterialsConfig);
+
+		if (Material.MaterialType != EglTFRuntimeMaterialType::Translucent && Material.BaseColorTextureMips.Num() > 0 && Material.BaseColorTextureMips[0].Pixels.Num() >= 4)
+		{
+			// check for alpha
+			for (int64 PixelChannelIndex = 3; PixelChannelIndex < Material.BaseColorTextureMips[0].Pixels.Num(); PixelChannelIndex += 4)
+			{
+				if (Material.BaseColorTextureMips[0].Pixels[PixelChannelIndex] < 255)
+				{
+					Material.MaterialType = EglTFRuntimeMaterialType::Translucent;
+					break;
+				}
+			}
 		}
 
 		LoadTexture(Asset, MeshMaterial->pbr.normal_map.texture, Material.NormalTextureMips, false, MaterialsConfig);
@@ -530,6 +525,11 @@ bool UglTFRuntimeFBXFunctionLibrary::LoadFBXAsRuntimeLODByNode(UglTFRuntimeAsset
 		return false;
 	}
 
+	if (Node->materials.count < 1)
+	{
+		return false;
+	}
+
 	TMap<uint32, TArray<TPair<int32, float>>> JointsWeightsMap;
 
 	const FglTFRuntimeMaterialsConfig* MaterialsConfig = &StaticMeshMaterialsConfig;
@@ -537,14 +537,14 @@ bool UglTFRuntimeFBXFunctionLibrary::LoadFBXAsRuntimeLODByNode(UglTFRuntimeAsset
 	int32 MaxBoneInfluences = 4;
 	int32 JointsWeightsGroups = 1;
 
+	TMap<FString, ufbx_blend_shape*> MorphTargets;
+
 	for (uint32 BlendDeformerIndex = 0; BlendDeformerIndex < Mesh->blend_deformers.count; BlendDeformerIndex++)
 	{
-		UE_LOG(LogTemp, Error, TEXT("BlendDeformer %s"), UTF8_TO_TCHAR(Mesh->blend_deformers.data[BlendDeformerIndex]->name.data));
 		for (uint32 BlendDeformerChannelIndex = 0; BlendDeformerChannelIndex < Mesh->blend_deformers.data[BlendDeformerIndex]->channels.count; BlendDeformerChannelIndex++)
 		{
-			UE_LOG(LogTemp, Warning, TEXT("BlendDeformerChannel %s [%d]")
-				, UTF8_TO_TCHAR(Mesh->blend_deformers.data[BlendDeformerIndex]->channels.data[BlendDeformerChannelIndex]->name.data)
-				, Mesh->blend_deformers.data[BlendDeformerIndex]->channels.data[BlendDeformerChannelIndex]->target_shape->num_offsets);
+			MorphTargets.Add(UTF8_TO_TCHAR(Mesh->blend_deformers.data[BlendDeformerIndex]->channels.data[BlendDeformerChannelIndex]->name.data)
+				, Mesh->blend_deformers.data[BlendDeformerIndex]->channels.data[BlendDeformerChannelIndex]->target_shape);
 		}
 	}
 
@@ -619,7 +619,8 @@ bool UglTFRuntimeFBXFunctionLibrary::LoadFBXAsRuntimeLODByNode(UglTFRuntimeAsset
 	TArray<uint32> TriangleIndices;
 	TriangleIndices.AddUninitialized(NumTriangleIndices);
 
-	RuntimeLOD.Primitives.AddDefaulted(Node->materials.count);
+	TArray<FglTFRuntimePrimitive> Primitives;
+	Primitives.AddDefaulted(Node->materials.count);
 
 	const bool bIsSkeletal = JointsWeightsMap.Num() > 0;
 
@@ -632,7 +633,7 @@ bool UglTFRuntimeFBXFunctionLibrary::LoadFBXAsRuntimeLODByNode(UglTFRuntimeAsset
 	{
 		ufbx_material* MeshMaterial = Mesh->materials.data[PrimitiveIndex];
 
-		FglTFRuntimePrimitive& Primitive = RuntimeLOD.Primitives[PrimitiveIndex];
+		FglTFRuntimePrimitive& Primitive = Primitives[PrimitiveIndex];
 
 		if (!MaterialsConfig->bSkipLoad)
 		{
@@ -652,14 +653,21 @@ bool UglTFRuntimeFBXFunctionLibrary::LoadFBXAsRuntimeLODByNode(UglTFRuntimeAsset
 		{
 			Primitive.UVs.AddDefaulted();
 		}
+
+		for (const TPair<FString, ufbx_blend_shape*>& Pair : MorphTargets)
+		{
+			FglTFRuntimeMorphTarget MorphTarget;
+			MorphTarget.Name = Pair.Key;
+			Primitive.MorphTargets.Add(MoveTemp(MorphTarget));
+		}
 	}
 
 	for (uint32 FaceIndex = 0; FaceIndex < Mesh->num_faces; FaceIndex++)
 	{
 		const uint32 MaterialIndex = Mesh->face_material.data[FaceIndex];
-		if (RuntimeLOD.Primitives.IsValidIndex(MaterialIndex))
+		if (Primitives.IsValidIndex(MaterialIndex))
 		{
-			FglTFRuntimePrimitive& Primitive = RuntimeLOD.Primitives[MaterialIndex];
+			FglTFRuntimePrimitive& Primitive = Primitives[MaterialIndex];
 
 			ufbx_face Face = Mesh->faces.data[FaceIndex];
 			uint32 NumTriangles = ufbx_triangulate_face(TriangleIndices.GetData(), NumTriangleIndices, Mesh, Face);
@@ -689,7 +697,7 @@ bool UglTFRuntimeFBXFunctionLibrary::LoadFBXAsRuntimeLODByNode(UglTFRuntimeAsset
 					}
 				}
 
-				ufbx_vec3 Position = ufbx_get_vertex_vec3(&Mesh->vertex_position, Index);
+				const ufbx_vec3 Position = ufbx_get_vertex_vec3(&Mesh->vertex_position, Index);
 
 				if (bIsSkeletal)
 				{
@@ -698,6 +706,20 @@ bool UglTFRuntimeFBXFunctionLibrary::LoadFBXAsRuntimeLODByNode(UglTFRuntimeAsset
 				else
 				{
 					Primitive.Positions.Add(Asset->GetParser()->TransformPosition(FVector(Position.x, Position.y, Position.z)));
+				}
+
+				for (FglTFRuntimeMorphTarget& MorphTarget : Primitive.MorphTargets)
+				{
+					ufbx_blend_shape* BlendShape = MorphTargets[MorphTarget.Name];
+					const ufbx_vec3 MorphTargetPosition = ufbx_get_blend_shape_vertex_offset(BlendShape, Mesh->vertex_indices.data[Index]);
+					if (bIsSkeletal)
+					{
+						MorphTarget.Positions.Add(glTFRuntimeFBX::GetTransform(Asset, Node->local_transform).TransformPosition(Asset->GetParser()->TransformPosition(FVector(MorphTargetPosition.x, MorphTargetPosition.y, MorphTargetPosition.z))));
+					}
+					else
+					{
+						MorphTarget.Positions.Add(Asset->GetParser()->TransformPosition(FVector(MorphTargetPosition.x, MorphTargetPosition.y, MorphTargetPosition.z)));
+					}
 				}
 
 				if (Mesh->vertex_normal.exists)
@@ -721,6 +743,15 @@ bool UglTFRuntimeFBXFunctionLibrary::LoadFBXAsRuntimeLODByNode(UglTFRuntimeAsset
 
 				Primitive.Indices.Add(Primitive.Positions.Num() - 1);
 			}
+		}
+	}
+
+	// ensure only non-empty primitives are added
+	for (FglTFRuntimePrimitive& Primitive : Primitives)
+	{
+		if (Primitive.Indices.Num() > 0)
+		{
+			RuntimeLOD.Primitives.Add(MoveTemp(Primitive));
 		}
 	}
 
