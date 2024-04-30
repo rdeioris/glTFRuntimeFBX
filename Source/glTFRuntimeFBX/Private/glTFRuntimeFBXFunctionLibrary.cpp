@@ -37,11 +37,10 @@ namespace glTFRuntimeFBX
 		return Asset->GetParser()->TransformTransform(Transform);
 	}
 
-	void FillSkeleton(UglTFRuntimeAsset* Asset, ufbx_skin_deformer* Skin, ufbx_node* Node, const int32 ParentIndex, TArray<FglTFRuntimeBone>& Skeleton, TMap<FString, int32>& BonesMap)
+	void FillSkeleton(UglTFRuntimeAsset* Asset, ufbx_skin_deformer* Skin, ufbx_node* Node, const int32 ParentIndex, TArray<FglTFRuntimeBone>& Skeleton, TMap<FString, int32>& BonesMap, bool& bRootProcessed)
 	{
-		const int32 NewIndex = Skeleton.AddDefaulted();
-		Skeleton[NewIndex].BoneName = UTF8_TO_TCHAR(Node->name.data);
-		Skeleton[NewIndex].ParentIndex = ParentIndex;
+
+		FglTFRuntimeBone Bone;
 
 		bool bHasBone = false;
 
@@ -49,6 +48,9 @@ namespace glTFRuntimeFBX
 		{
 			if (Skin->clusters.data[ClusterIndex]->bone_node == Node)
 			{
+				// as soon as we find a bone, we consider the root processed
+				bRootProcessed = true;
+
 				ufbx_matrix BoneMatrix = Skin->clusters.data[ClusterIndex]->bind_to_world;
 
 				bool bFound = false;
@@ -70,8 +72,7 @@ namespace glTFRuntimeFBX
 					BoneMatrix = ufbx_matrix_mul(&ParentBoneInverseMatrix, &BoneMatrix);
 				}
 
-
-				Skeleton[NewIndex].Transform = glTFRuntimeFBX::GetTransform(Asset, ufbx_matrix_to_transform(&BoneMatrix));
+				Bone.Transform = glTFRuntimeFBX::GetTransform(Asset, ufbx_matrix_to_transform(&BoneMatrix));
 				bHasBone = true;
 				break;
 			}
@@ -79,14 +80,23 @@ namespace glTFRuntimeFBX
 
 		if (!bHasBone)
 		{
-			Skeleton[NewIndex].Transform = glTFRuntimeFBX::GetTransform(Asset, Node->local_transform);
+			if (bRootProcessed)
+			{
+				return;
+			}
+			Bone.Transform = glTFRuntimeFBX::GetTransform(Asset, Node->local_transform);
 		}
+
+		Bone.BoneName = UTF8_TO_TCHAR(Node->name.data);
+		Bone.ParentIndex = ParentIndex;
+
+		const int32 NewIndex = Skeleton.Add(Bone);
 
 		BonesMap.Add(Skeleton[NewIndex].BoneName, NewIndex);
 
 		for (ufbx_node* Child : Node->children)
 		{
-			FillSkeleton(Asset, Skin, Child, NewIndex, Skeleton, BonesMap);
+			FillSkeleton(Asset, Skin, Child, NewIndex, Skeleton, BonesMap, bRootProcessed);
 		}
 	}
 
@@ -381,6 +391,35 @@ TArray<FglTFRuntimeFBXNode> UglTFRuntimeFBXFunctionLibrary::GetFBXNodeChildren(U
 	return Nodes;
 }
 
+bool UglTFRuntimeFBXFunctionLibrary::IsFBXNodeBone(UglTFRuntimeAsset* Asset, const FglTFRuntimeFBXNode& FBXNode)
+{
+	TSharedPtr<FglTFRuntimeFBXCacheData> RuntimeFBXCacheData = nullptr;
+	{
+		FScopeLock Lock(&(Asset->GetParser()->PluginsCacheDataLock));
+
+		RuntimeFBXCacheData = glTFRuntimeFBX::GetCacheData(Asset);
+		if (!RuntimeFBXCacheData)
+		{
+			return false;
+		}
+	}
+
+	if (RuntimeFBXCacheData->NodesMap.Contains(FBXNode.Id))
+	{
+		ufbx_node* Node = RuntimeFBXCacheData->NodesMap[FBXNode.Id];
+		for (uint32 ClusterIndex = 0; ClusterIndex < RuntimeFBXCacheData->Scene->skin_clusters.count; ClusterIndex++)
+		{
+			ufbx_skin_cluster* Cluster = RuntimeFBXCacheData->Scene->skin_clusters.data[ClusterIndex];
+			if (Cluster->bone_node == Node)
+			{
+				return true;
+			}
+		}
+	}
+
+	return false;
+}
+
 TArray<FglTFRuntimeFBXAnim> UglTFRuntimeFBXFunctionLibrary::GetFBXAnimations(UglTFRuntimeAsset* Asset)
 {
 	TArray<FglTFRuntimeFBXAnim> Anims;
@@ -538,11 +577,6 @@ bool UglTFRuntimeFBXFunctionLibrary::LoadFBXAsRuntimeLODByNode(UglTFRuntimeAsset
 		return false;
 	}
 
-	if (Node->materials.count < 1)
-	{
-		return false;
-	}
-
 	TMap<uint32, TArray<TPair<int32, float>>> JointsWeightsMap;
 
 	const FglTFRuntimeMaterialsConfig* MaterialsConfig = &StaticMeshMaterialsConfig;
@@ -590,7 +624,8 @@ bool UglTFRuntimeFBXFunctionLibrary::LoadFBXAsRuntimeLODByNode(UglTFRuntimeAsset
 					Parent = Parent->parent;
 				}
 
-				glTFRuntimeFBX::FillSkeleton(Asset, Skin, RootNode, INDEX_NONE, Skeleton, BonesMap);
+				bool bRootProcessed = false;
+				glTFRuntimeFBX::FillSkeleton(Asset, Skin, RootNode, INDEX_NONE, Skeleton, BonesMap, bRootProcessed);
 			}
 
 			const FString BoneName = UTF8_TO_TCHAR(Cluster->bone_node->name.data);
@@ -633,7 +668,15 @@ bool UglTFRuntimeFBXFunctionLibrary::LoadFBXAsRuntimeLODByNode(UglTFRuntimeAsset
 	TriangleIndices.AddUninitialized(NumTriangleIndices);
 
 	TArray<FglTFRuntimePrimitive> Primitives;
-	Primitives.AddDefaulted(Node->materials.count);
+
+	uint32 NumMaterials = Node->materials.count;
+	if (NumMaterials == 0)
+	{
+		// fallback to the default material
+		NumMaterials = 1;
+	}
+
+	Primitives.AddDefaulted(NumMaterials);
 
 	const bool bIsSkeletal = JointsWeightsMap.Num() > 0;
 
@@ -642,15 +685,20 @@ bool UglTFRuntimeFBXFunctionLibrary::LoadFBXAsRuntimeLODByNode(UglTFRuntimeAsset
 		MaterialsConfig = &SkeletalMeshMaterialsConfig;
 	}
 
-	for (uint32 PrimitiveIndex = 0; PrimitiveIndex < Node->materials.count; PrimitiveIndex++)
-	{
-		ufbx_material* MeshMaterial = Mesh->materials.data[PrimitiveIndex];
+	
 
+	for (uint32 PrimitiveIndex = 0; PrimitiveIndex < NumMaterials; PrimitiveIndex++)
+	{
 		FglTFRuntimePrimitive& Primitive = Primitives[PrimitiveIndex];
 
-		if (!MaterialsConfig->bSkipLoad)
+		if (Node->materials.count > 0)
 		{
-			Primitive.Material = glTFRuntimeFBX::LoadMaterial(Asset, RuntimeFBXCacheData.ToSharedRef(), MeshMaterial, *MaterialsConfig);
+			ufbx_material* MeshMaterial = Mesh->materials.data[PrimitiveIndex];
+
+			if (!MaterialsConfig->bSkipLoad)
+			{
+				Primitive.Material = glTFRuntimeFBX::LoadMaterial(Asset, RuntimeFBXCacheData.ToSharedRef(), MeshMaterial, *MaterialsConfig);
+			}
 		}
 
 		if (bIsSkeletal)
@@ -677,7 +725,12 @@ bool UglTFRuntimeFBXFunctionLibrary::LoadFBXAsRuntimeLODByNode(UglTFRuntimeAsset
 
 	for (uint32 FaceIndex = 0; FaceIndex < Mesh->num_faces; FaceIndex++)
 	{
-		const uint32 MaterialIndex = Mesh->face_material.data[FaceIndex];
+		uint32 MaterialIndex = 0;
+		if (FaceIndex < Mesh->face_material.count)
+		{
+			MaterialIndex = Mesh->face_material.data[FaceIndex];
+		}
+		
 		if (Primitives.IsValidIndex(MaterialIndex))
 		{
 			FglTFRuntimePrimitive& Primitive = Primitives[MaterialIndex];

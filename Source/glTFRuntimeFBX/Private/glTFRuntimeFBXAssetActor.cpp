@@ -10,9 +10,12 @@ AglTFRuntimeFBXAssetActor::AglTFRuntimeFBXAssetActor()
 {
 	// Set this actor to call Tick() every frame.  You can turn this off to improve performance if you don't need it.
 	PrimaryActorTick.bCanEverTick = false;
+	DefaultAnimation = EglTFRuntimeFBXAssetActorDefaultAnimation::First;
+	bDefaultAnimationLoop = true;
 
 	AssetRoot = CreateDefaultSubobject<USceneComponent>(TEXT("AssetRoot"));
 	RootComponent = AssetRoot;
+
 }
 
 // Called when the game starts or when spawned
@@ -27,23 +30,74 @@ void AglTFRuntimeFBXAssetActor::BeginPlay()
 
 	double LoadingStartTime = FPlatformTime::Seconds();
 
-	float BestDuration = 0;
-	FglTFRuntimeFBXAnim BestFBXAnim;
-	for (const FglTFRuntimeFBXAnim& FBXAnim : UglTFRuntimeFBXFunctionLibrary::GetFBXAnimations(Asset))
-	{
-		//if (FBXAnim.Duration > BestDuration)
-		{
-			BestDuration = FBXAnim.Duration;
-			BestFBXAnim = FBXAnim;
-		}
-	}
-
 	FglTFRuntimeFBXNode RootFBXNode = UglTFRuntimeFBXFunctionLibrary::GetFBXRootNode(Asset);
 
 	for (const FglTFRuntimeFBXNode& ChildNode : UglTFRuntimeFBXFunctionLibrary::GetFBXNodeChildren(Asset, RootFBXNode))
 	{
-		ProcessNode(RootComponent, ChildNode, BestFBXAnim);
+		ProcessNode(RootComponent, ChildNode, NAME_None);
 	}
+
+	// attach to skeletons
+	for (const TPair<USceneComponent*, FName>& Pair : DiscoveredAttachments)
+	{
+		for (const TPair<USkeletalMeshComponent*, FglTFRuntimeFBXNode>& PairSkeletalMesh : DiscoveredSkeletalMeshes)
+		{
+			if (PairSkeletalMesh.Key->DoesSocketExist(Pair.Value))
+			{
+				Pair.Key->AttachToComponent(PairSkeletalMesh.Key, FAttachmentTransformRules::KeepRelativeTransform, Pair.Value);
+				break;
+			}
+		}
+	}
+
+	if (DefaultAnimation != EglTFRuntimeFBXAssetActorDefaultAnimation::None)
+	{
+		const TArray<FglTFRuntimeFBXAnim> Animations = UglTFRuntimeFBXFunctionLibrary::GetFBXAnimations(Asset);
+		if (Animations.Num() > 0)
+		{
+			if (DefaultAnimation == EglTFRuntimeFBXAssetActorDefaultAnimation::First)
+			{
+				PlayFBXAnimation(Animations[0], bDefaultAnimationLoop);
+			}
+			else if (DefaultAnimation == EglTFRuntimeFBXAssetActorDefaultAnimation::Last)
+			{
+				PlayFBXAnimation(Animations.Last(), bDefaultAnimationLoop);
+			}
+			else if (DefaultAnimation == EglTFRuntimeFBXAssetActorDefaultAnimation::Random)
+			{
+				PlayFBXAnimation(Animations[FMath::RandRange(0, Animations.Num() - 1)], bDefaultAnimationLoop);
+			}
+			else if (DefaultAnimation == EglTFRuntimeFBXAssetActorDefaultAnimation::Shortest)
+			{
+				float BestDuration = MAX_FLT;
+				FglTFRuntimeFBXAnim BestFBXAnim;
+				for (const FglTFRuntimeFBXAnim& FBXAnim : UglTFRuntimeFBXFunctionLibrary::GetFBXAnimations(Asset))
+				{
+					if (FBXAnim.Duration < BestDuration)
+					{
+						BestDuration = FBXAnim.Duration;
+						BestFBXAnim = FBXAnim;
+					}
+				}
+				PlayFBXAnimation(BestFBXAnim, bDefaultAnimationLoop);
+			}
+			else if (DefaultAnimation == EglTFRuntimeFBXAssetActorDefaultAnimation::Longest)
+			{
+				float BestDuration = 0;
+				FglTFRuntimeFBXAnim BestFBXAnim;
+				for (const FglTFRuntimeFBXAnim& FBXAnim : UglTFRuntimeFBXFunctionLibrary::GetFBXAnimations(Asset))
+				{
+					if (FBXAnim.Duration > BestDuration)
+					{
+						BestDuration = FBXAnim.Duration;
+						BestFBXAnim = FBXAnim;
+					}
+				}
+				PlayFBXAnimation(BestFBXAnim, bDefaultAnimationLoop);
+			}
+		}
+	}
+
 
 	UE_LOG(LogGLTFRuntime, Log, TEXT("Asset loaded in %f seconds"), FPlatformTime::Seconds() - LoadingStartTime);
 }
@@ -55,8 +109,19 @@ void AglTFRuntimeFBXAssetActor::Tick(float DeltaTime)
 
 }
 
-void AglTFRuntimeFBXAssetActor::ProcessNode(USceneComponent* CurrentParentComponent, const FglTFRuntimeFBXNode& FBXNode, const FglTFRuntimeFBXAnim& FBXAnim)
+void AglTFRuntimeFBXAssetActor::ProcessNode(USceneComponent* CurrentParentComponent, const FglTFRuntimeFBXNode& FBXNode, const FName SocketName)
 {
+	if (UglTFRuntimeFBXFunctionLibrary::IsFBXNodeBone(Asset, FBXNode))
+	{
+		FName NewSocketName = *FBXNode.Name;
+		for (const FglTFRuntimeFBXNode& ChildNode : UglTFRuntimeFBXFunctionLibrary::GetFBXNodeChildren(Asset, FBXNode))
+		{
+			ProcessNode(CurrentParentComponent, ChildNode, NewSocketName);
+		}
+
+		return;
+	}
+
 	USceneComponent* SceneComponent = nullptr;
 	if (FBXNode.bHasMesh)
 	{
@@ -70,18 +135,7 @@ void AglTFRuntimeFBXAssetActor::ProcessNode(USceneComponent* CurrentParentCompon
 				if (SkeletalMesh)
 				{
 					NewSkeletalMeshComponent->SetSkeletalMesh(SkeletalMesh);
-
-					if (FBXAnim.Duration > 0)
-					{
-						UAnimSequence* NewAnimSequence = UglTFRuntimeFBXFunctionLibrary::LoadFBXAnimAsSkeletalMeshAnimation(Asset, FBXAnim, FBXNode, SkeletalMesh, SkeletalAnimationConfig);
-						if (NewAnimSequence)
-						{
-							NewSkeletalMeshComponent->AnimationData.AnimToPlay = NewAnimSequence;
-							NewSkeletalMeshComponent->AnimationData.bSavedLooping = true;
-							NewSkeletalMeshComponent->AnimationData.bSavedPlaying = true;
-							NewSkeletalMeshComponent->SetAnimationMode(EAnimationMode::AnimationSingleNode);
-						}
-					}
+					DiscoveredSkeletalMeshes.Add({ NewSkeletalMeshComponent, FBXNode });
 				}
 				SceneComponent = NewSkeletalMeshComponent;
 			}
@@ -110,15 +164,50 @@ void AglTFRuntimeFBXAssetActor::ProcessNode(USceneComponent* CurrentParentCompon
 	}
 	else
 	{
-		SceneComponent->SetupAttachment(CurrentParentComponent);
+		if (SocketName == NAME_None)
+		{
+			SceneComponent->SetupAttachment(CurrentParentComponent);
+		}
+		else
+		{
+			DiscoveredAttachments.Add({ SceneComponent, SocketName });
+		}
 		SceneComponent->SetRelativeTransform(FBXNode.Transform);
 	}
 	SceneComponent->RegisterComponent();
-	
+
 	AddInstanceComponent(SceneComponent);
 
 	for (const FglTFRuntimeFBXNode& ChildNode : UglTFRuntimeFBXFunctionLibrary::GetFBXNodeChildren(Asset, FBXNode))
 	{
-		ProcessNode(SceneComponent, ChildNode, FBXAnim);
+		ProcessNode(SceneComponent, ChildNode, SocketName);
+	}
+}
+
+TArray<FglTFRuntimeFBXAnim> AglTFRuntimeFBXAssetActor::GetFBXAnimations() const
+{
+	if (!Asset)
+	{
+		return {};
+	}
+
+	return UglTFRuntimeFBXFunctionLibrary::GetFBXAnimations(Asset);
+}
+
+void AglTFRuntimeFBXAssetActor::PlayFBXAnimation(const FglTFRuntimeFBXAnim& FBXAnim, const bool bLoop)
+{
+	if (FBXAnim.Duration > 0)
+	{
+		for (const TPair<USkeletalMeshComponent*, FglTFRuntimeFBXNode>& Pair : DiscoveredSkeletalMeshes)
+		{
+			UAnimSequence* NewAnimSequence = UglTFRuntimeFBXFunctionLibrary::LoadFBXAnimAsSkeletalMeshAnimation(Asset, FBXAnim, Pair.Value, Pair.Key->GetSkeletalMeshAsset(), SkeletalAnimationConfig);
+			if (NewAnimSequence)
+			{
+				Pair.Key->AnimationData.AnimToPlay = NewAnimSequence;
+				Pair.Key->AnimationData.bSavedLooping = bLoop;
+				Pair.Key->AnimationData.bSavedPlaying = true;
+				Pair.Key->SetAnimationMode(EAnimationMode::AnimationSingleNode);
+			}
+		}
 	}
 }

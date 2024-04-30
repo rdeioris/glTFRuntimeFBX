@@ -8,6 +8,17 @@
 #include "glTFRuntimeFBXFunctionLibrary.h"
 #include "glTFRuntimeFBXAssetActor.generated.h"
 
+UENUM(BlueprintType)
+enum class EglTFRuntimeFBXAssetActorDefaultAnimation : uint8
+{
+	First,
+	Last,
+	Shortest,
+	Longest,
+	Random,
+	None
+};
+
 UCLASS()
 class GLTFRUNTIMEFBX_API AglTFRuntimeFBXAssetActor : public AActor
 {
@@ -27,7 +38,7 @@ protected:
 		return MakeUniqueObjectName(this, T::StaticClass(), *Node.Name);
 	}
 
-	void ProcessNode(USceneComponent* CurrentParentComponent, const FglTFRuntimeFBXNode& FBXNode, const FglTFRuntimeFBXAnim& FBXAnim);
+	void ProcessNode(USceneComponent* CurrentParentComponent, const FglTFRuntimeFBXNode& FBXNode, const FName SocketName);
 
 public:	
 	// Called every frame
@@ -45,8 +56,25 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Meta = (ExposeOnSpawn = true), Category = "glTFRuntime|FBX")
 	FglTFRuntimeSkeletalAnimationConfig SkeletalAnimationConfig;
 
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Meta = (ExposeOnSpawn = true), Category = "glTFRuntime|FBX")
+	EglTFRuntimeFBXAssetActorDefaultAnimation DefaultAnimation;
+
+	UFUNCTION(BlueprintCallable, BlueprintPure, Category = "glTFRuntime|FBX")
+	TArray<FglTFRuntimeFBXAnim> GetFBXAnimations() const;
+
+	UFUNCTION(BlueprintCallable, Category = "glTFRuntime|FBX")
+	void PlayFBXAnimation(const FglTFRuntimeFBXAnim& FBXAnim, const bool bLoop);
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Meta = (ExposeOnSpawn = true), Category = "glTFRuntime|FBX")
+	bool bDefaultAnimationLoop;
+
+
+protected:
+	TArray<TPair<USkeletalMeshComponent*, FglTFRuntimeFBXNode>> DiscoveredSkeletalMeshes;
+
+	TArray<TPair<USceneComponent*, FName>> DiscoveredAttachments;
+
 private:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, meta = (AllowPrivateAccess = "true"), Category = "glTFRuntime|FBX")
 	USceneComponent* AssetRoot;
-
 };
