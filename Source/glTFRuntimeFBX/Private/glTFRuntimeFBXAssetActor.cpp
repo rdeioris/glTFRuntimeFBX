@@ -113,7 +113,7 @@ void AglTFRuntimeFBXAssetActor::ProcessNode(USceneComponent* CurrentParentCompon
 {
 	if (UglTFRuntimeFBXFunctionLibrary::IsFBXNodeBone(Asset, FBXNode))
 	{
-		FName NewSocketName = *FBXNode.Name;
+		const FName NewSocketName = *FBXNode.Name;
 		for (const FglTFRuntimeFBXNode& ChildNode : UglTFRuntimeFBXFunctionLibrary::GetFBXNodeChildren(Asset, FBXNode))
 		{
 			ProcessNode(CurrentParentComponent, ChildNode, NewSocketName);
@@ -180,7 +180,7 @@ void AglTFRuntimeFBXAssetActor::ProcessNode(USceneComponent* CurrentParentCompon
 
 	for (const FglTFRuntimeFBXNode& ChildNode : UglTFRuntimeFBXFunctionLibrary::GetFBXNodeChildren(Asset, FBXNode))
 	{
-		ProcessNode(SceneComponent, ChildNode, SocketName);
+		ProcessNode(SceneComponent, ChildNode, NAME_None);
 	}
 }
 
