@@ -125,3 +125,7 @@ Generates an Animation Asset (bones only) from an 'unskinned' FBX (animation cur
 The system assumes that every animation curve has the same name of a bone in the provided SkeletalMesh asset. 
 
 ## Materials handling
+
+## Special Thanks
+
+HEAT (https://heat.tech/) for providing the test assets and supporting the development.
