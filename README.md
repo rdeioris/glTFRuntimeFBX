@@ -9,11 +9,13 @@ Currently the following features are supported:
 * Skeletal Meshes with unlimited influences
 * Morph Targets
 * Skeletal Animations
+* MorphTarget Animations
+* Vertex Colors
 * PBR Material (still far from perfect)
 
 Work in progress:
 
-* Morph Target Animations
+* LOD Groups
 * Cameras
 * Lights
 * Async functions
