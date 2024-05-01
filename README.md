@@ -8,7 +8,7 @@ Currently the following features are supported:
 * Hierarchies
 * Skeletal Meshes with unlimited influences
 * Morph Targets
-* Skeletal Animations
+* Skeletal Animations (with or without Mesh specified in the asset)
 * MorphTarget Animations
 * Vertex Colors
 * PBR Material (still far from perfect)
@@ -21,6 +21,7 @@ Work in progress:
 * Async functions
 * Improved material handling
 * Raw curves extraction
+* Animation retargeting
 
 This plugin makes use of the amazing ufbx (https://github.com/ufbx/ufbx) library for the parsing.
 
