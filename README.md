@@ -28,6 +28,14 @@ Work in progress:
 
 This plugin makes use of the amazing ufbx (https://github.com/ufbx/ufbx) library for the parsing.
 
+## Installation
+
+* You need an Unreal C++ project (otherwise you will not be able to compile this plugin).
+* You need glTFRuntime enabled in your project (at least version 20240427)
+* Clone the master branch of this repository in the Plugins/ directory of your project
+* Regenerate the solution
+* Enjoy!
+
 ## Usage
 
 The easiest way is to use the provided Actor, ```glTFRuntimeFBXAssetActor``` that contains the logic for building a scene by iterating the nodes as well as playing animations.
@@ -125,3 +133,7 @@ Generates an Animation Asset (bones only) from an 'unskinned' FBX (animation cur
 The system assumes that every animation curve has the same name of a bone in the provided SkeletalMesh asset. 
 
 ## Materials handling
+
+## Special Thanks
+
+HEAT (https://heat.tech/) for providing the test assets and supporting the development.
