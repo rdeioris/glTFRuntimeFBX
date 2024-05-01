@@ -52,43 +52,76 @@ The glTFRuntimeFBXAssetActor uses those functions to implement its whole logic.
 
 There are two main 'Objects' (well, actually they are Structs) to deal with:
 
-* FBXNode (FglTFRuntimeFBXNode): represents a node in the FBX asset, it is the basic block for the hiearchy (nodes can be plain transforms/locators, meshes, skeletons, cameras, lights...)
-* FBXAnim (FglTFRuntimeFBXAnim): represents an animation, multiple animations can be exposed in the same asset
+* FBXNode (FglTFRuntimeFBXNode): represents a node in the FBX asset, it is the basic block for the hiearchy (nodes can be plain transforms/locators, meshes, skeletons, bones, cameras, lights...). It exposes a name.
+* FBXAnim (FglTFRuntimeFBXAnim): represents an animation, multiple animations can be exposed in the same asset. It exposes a name and the duration of the animation (in seconds).
 
 ```cpp
 static FglTFRuntimeFBXNode GetFBXRootNode(UglTFRuntimeAsset* Asset);
 ```
 
+Returns the so called "root node" (the initial node in the tree from which you can start iterating the graph)
+
 ```cpp
 static TArray<FglTFRuntimeFBXNode> GetFBXNodes(UglTFRuntimeAsset* Asset);
 ```
+
+Returns all of the nodes in the asset.
+
+```cpp
+static TArray<FglTFRuntimeFBXNode> GetFBXNodesMeshes(UglTFRuntimeAsset* Asset);
+```
+
+Returns all of the nodes containing a mesh.
 
 ```cpp
 static TArray<FglTFRuntimeFBXNode> GetFBXNodeChildren(UglTFRuntimeAsset* Asset, const FglTFRuntimeFBXNode& FBXNode);
 ```
 
+Get the children of a node.
+
 ```cpp
 static TArray<FglTFRuntimeFBXAnim> GetFBXAnimations(UglTFRuntimeAsset* Asset);
 ```
+
+Returns all the animations in the asset.
 
 ```cpp
 static bool GetFBXDefaultAnimation(UglTFRuntimeAsset* Asset, FglTFRuntimeFBXAnim& FBXAnim);
 ```
 
+An asset can specify a default animation. If available this function will return it in the FBXAnim parameter. (otherwise it returns 'false')
+
 ```cpp
 static bool IsFBXNodeBone(UglTFRuntimeAsset* Asset, const FglTFRuntimeFBXNode& FBXNode);
 ```
 
+Returns true if the specified node is a bone.
+
 ```cpp
-static bool LoadFBXAsRuntimeLODByNode(UglTFRuntimeAsset* Asset, const FglTFRuntimeFBXNode& FBXNode, FglTFRuntimeMeshLOD& RuntimeLOD, const FglTFRuntimeMaterialsConfig& StaticMeshMaterialsConfig, const FglTFRuntimeMaterialsConfig& SkeletalMeshMaterialsConfig);
+static bool LoadFBXAsRuntimeLODByNode(UglTFRuntimeAsset* Asset, const FglTFRuntimeFBXNode& FBXNode, FglTFRuntimeMeshLOD& RuntimeLOD, bool& bIsSkeletal, const FglTFRuntimeMaterialsConfig& StaticMeshMaterialsConfig, const FglTFRuntimeMaterialsConfig& SkeletalMeshMaterialsConfig);
 ```
+
+Generates a glTFRuntime MeshLOD from an FBXNode. It is the basic structure for generating Static and SkeletalMeshes:
+
+![image](https://github.com/rdeioris/glTFRuntimeFBX/assets/2234592/1519f782-9cb0-487e-8b7f-fd0cab48a500)
+
 
 ```cpp
 static UAnimSequence* LoadFBXAnimAsSkeletalMeshAnimation(UglTFRuntimeAsset* Asset, const FglTFRuntimeFBXAnim& FBXAnim, const FglTFRuntimeFBXNode& FBXNode, USkeletalMesh* SkeletalMesh, const FglTFRuntimeSkeletalAnimationConfig& SkeletalAnimationConfig);
 ```
 
+Generates an Animation Asset (supporting both bones and morph targets) starting from an FBXAnim. The Animation curves are generated for the specified FBXNode mesh and the related SkeletalMesh.
+
+This function assumes you are extracting both the mesh and the animation from the same asset. If you need to extract an animation from a different FXB files (like the mixamo 'unskinned' ones) you can use the LoadFBXExternalAnimAsSkeletalMeshAnimation variant.
+
 ```cpp
 static UAnimSequence* LoadFBXExternalAnimAsSkeletalMeshAnimation(UglTFRuntimeAsset* Asset, const FglTFRuntimeFBXAnim& FBXAnim, USkeletalMesh* SkeletalMesh, const FglTFRuntimeSkeletalAnimationConfig& SkeletalAnimationConfig);
 ```
+
+Generates an Animation Asset (bones only) from an 'unskinned' FBX (animation curves without related meshes):
+
+![image](https://github.com/rdeioris/glTFRuntimeFBX/assets/2234592/92a8e4c0-9f98-4045-9989-a7f51c666546)
+
+The system assumes that every animation curve has the same name of a bone in the provided SkeletalMesh asset. 
 
 ## Materials handling
