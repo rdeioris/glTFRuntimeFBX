@@ -134,6 +134,10 @@ The system assumes that every animation curve has the same name of a bone in the
 
 ## Materials handling
 
+## Support
+
+The 'fbx' channel on the glTFRuntime discord server (https://discord.gg/DzS7MHy)
+
 ## Special Thanks
 
 HEAT (https://heat.tech/) for providing the test assets and supporting the development.
