@@ -10,7 +10,7 @@ AglTFRuntimeFBXAssetActor::AglTFRuntimeFBXAssetActor()
 {
 	// Set this actor to call Tick() every frame.  You can turn this off to improve performance if you don't need it.
 	PrimaryActorTick.bCanEverTick = false;
-	DefaultAnimation = EglTFRuntimeFBXAssetActorDefaultAnimation::First;
+	DefaultAnimation = EglTFRuntimeFBXAssetActorDefaultAnimation::Default;
 	bDefaultAnimationLoop = true;
 
 	AssetRoot = CreateDefaultSubobject<USceneComponent>(TEXT("AssetRoot"));
@@ -55,7 +55,15 @@ void AglTFRuntimeFBXAssetActor::BeginPlay()
 		const TArray<FglTFRuntimeFBXAnim> Animations = UglTFRuntimeFBXFunctionLibrary::GetFBXAnimations(Asset);
 		if (Animations.Num() > 0)
 		{
-			if (DefaultAnimation == EglTFRuntimeFBXAssetActorDefaultAnimation::First)
+			if (DefaultAnimation == EglTFRuntimeFBXAssetActorDefaultAnimation::Default)
+			{
+				FglTFRuntimeFBXAnim DefaultFBXAnim;
+				if (UglTFRuntimeFBXFunctionLibrary::GetFBXDefaultAnimation(Asset, DefaultFBXAnim))
+				{
+					PlayFBXAnimation(DefaultFBXAnim, bDefaultAnimationLoop);
+				}
+			}
+			else if (DefaultAnimation == EglTFRuntimeFBXAssetActorDefaultAnimation::First)
 			{
 				PlayFBXAnimation(Animations[0], bDefaultAnimationLoop);
 			}

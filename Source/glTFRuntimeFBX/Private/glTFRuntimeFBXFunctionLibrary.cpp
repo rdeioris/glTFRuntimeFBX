@@ -10,6 +10,7 @@ struct FglTFRuntimeFBXCacheData : FglTFRuntimePluginCacheData
 	ufbx_scene* Scene = nullptr;
 
 	TMap<uint32, ufbx_node*> NodesMap;
+	TMap<FString, ufbx_node*> NodesNamesMap;
 
 	~FglTFRuntimeFBXCacheData()
 	{
@@ -172,6 +173,10 @@ namespace glTFRuntimeFBX
 			ufbx_node* Node = RuntimeFBXCacheData->Scene->nodes.data[NodeIndex];
 
 			RuntimeFBXCacheData->NodesMap.Add(Node->element_id, Node);
+			if (Node->name.length > 0)
+			{
+				RuntimeFBXCacheData->NodesNamesMap.Add(UTF8_TO_TCHAR(Node->name.data), Node);
+			}
 		}
 
 		RuntimeFBXCacheData->bValid = true;
@@ -293,7 +298,7 @@ namespace glTFRuntimeFBX
 
 		LoadTexture(Asset, RuntimeFBXCacheData, MeshMaterial->pbr.emission_color.texture, Material.EmissiveTextureCache, true, MaterialsConfig);
 
-		return Asset->GetParser()->BuildMaterial(-1, UTF8_TO_TCHAR(MeshMaterial->name.data), Material, MaterialsConfig, false);
+		return Asset->GetParser()->BuildMaterial(-1, UTF8_TO_TCHAR(MeshMaterial->name.data), Material, MaterialsConfig, true);
 	}
 }
 
@@ -420,6 +425,40 @@ bool UglTFRuntimeFBXFunctionLibrary::IsFBXNodeBone(UglTFRuntimeAsset* Asset, con
 	return false;
 }
 
+bool UglTFRuntimeFBXFunctionLibrary::GetFBXDefaultAnimation(UglTFRuntimeAsset* Asset, FglTFRuntimeFBXAnim& FBXAnim)
+{
+	TSharedPtr<FglTFRuntimeFBXCacheData> RuntimeFBXCacheData = nullptr;
+	{
+		FScopeLock Lock(&(Asset->GetParser()->PluginsCacheDataLock));
+
+		RuntimeFBXCacheData = glTFRuntimeFBX::GetCacheData(Asset);
+		if (!RuntimeFBXCacheData)
+		{
+			return false;
+		}
+	}
+
+	ufbx_anim* Anim = RuntimeFBXCacheData->Scene->anim;
+	if (Anim)
+	{
+
+		for (int32 AnimStackIndex = 0; AnimStackIndex < RuntimeFBXCacheData->Scene->anim_stacks.count; AnimStackIndex++)
+		{
+			ufbx_anim_stack* AnimStack = RuntimeFBXCacheData->Scene->anim_stacks.data[AnimStackIndex];
+
+			if (AnimStack->anim == Anim)
+			{
+				FBXAnim.Id = AnimStack->element_id;
+				FBXAnim.Name = UTF8_TO_TCHAR(AnimStack->name.data);
+				FBXAnim.Duration = AnimStack->time_end - AnimStack->time_begin;
+				return true;
+			}
+		}
+	}
+
+	return false;
+}
+
 TArray<FglTFRuntimeFBXAnim> UglTFRuntimeFBXFunctionLibrary::GetFBXAnimations(UglTFRuntimeAsset* Asset)
 {
 	TArray<FglTFRuntimeFBXAnim> Anims;
@@ -473,20 +512,14 @@ UAnimSequence* UglTFRuntimeFBXFunctionLibrary::LoadFBXAnimAsSkeletalMeshAnimatio
 		}
 	}
 
-	ufbx_node* FoundNode = nullptr;
-
-	for (int32 NodeIndex = 0; NodeIndex < RuntimeFBXCacheData->Scene->nodes.count; NodeIndex++)
+	if (!RuntimeFBXCacheData->NodesMap.Contains(FBXNode.Id))
 	{
-		ufbx_node* Node = RuntimeFBXCacheData->Scene->nodes.data[NodeIndex];
-
-		if (Node->element_id == FBXNode.Id)
-		{
-			FoundNode = Node;
-			break;
-		}
+		return nullptr;
 	}
 
-	if (!FoundNode || !FoundNode->mesh || FoundNode->mesh->skin_deformers.count < 1)
+	ufbx_node* FoundNode = RuntimeFBXCacheData->NodesMap[FBXNode.Id];
+
+	if (!FoundNode || !FoundNode->mesh || (FoundNode->mesh->skin_deformers.count < 1 && FoundNode->mesh->blend_deformers.count < 1))
 	{
 		return nullptr;
 	}
@@ -539,6 +572,98 @@ UAnimSequence* UglTFRuntimeFBXFunctionLibrary::LoadFBXAnimAsSkeletalMeshAnimatio
 
 			PosesMap.Add(BoneName, MoveTemp(Track));
 		}
+	}
+
+	for (uint32 BlendDeformerIndex = 0; BlendDeformerIndex < FoundNode->mesh->blend_deformers.count; BlendDeformerIndex++)
+	{
+		for (uint32 BlendDeformerChannelIndex = 0; BlendDeformerChannelIndex < FoundNode->mesh->blend_deformers.data[BlendDeformerIndex]->channels.count; BlendDeformerChannelIndex++)
+		{
+			const FString MorphTargetName = UTF8_TO_TCHAR(FoundNode->mesh->blend_deformers.data[BlendDeformerIndex]->channels.data[BlendDeformerChannelIndex]->name.data);
+			float Time = FoundAnim->time_begin;
+			TArray<TPair<float, float>> MorphTargetValues;
+			for (int32 FrameIndex = 0; FrameIndex < NumFrames; FrameIndex++)
+			{
+				const float Weight = ufbx_evaluate_blend_weight(FoundAnim->anim, FoundNode->mesh->blend_deformers.data[BlendDeformerIndex]->channels.data[BlendDeformerChannelIndex], Time);
+				MorphTargetValues.Add({ Time, Weight });
+				Time += Delta;
+			}
+
+			MorphTargetCurves.Add(*MorphTargetName, MoveTemp(MorphTargetValues));
+		}
+	}
+
+	return Asset->GetParser()->LoadSkeletalAnimationFromTracksAndMorphTargets(SkeletalMesh, PosesMap, MorphTargetCurves, Duration, SkeletalAnimationConfig);
+}
+
+UAnimSequence* UglTFRuntimeFBXFunctionLibrary::LoadFBXExternalAnimAsSkeletalMeshAnimation(UglTFRuntimeAsset* Asset, const FglTFRuntimeFBXAnim& FBXAnim, USkeletalMesh* SkeletalMesh, const FglTFRuntimeSkeletalAnimationConfig& SkeletalAnimationConfig)
+{
+	if (!Asset || !SkeletalMesh)
+	{
+		return nullptr;
+	}
+
+	TSharedPtr<FglTFRuntimeFBXCacheData> RuntimeFBXCacheData = nullptr;
+	{
+		FScopeLock Lock(&(Asset->GetParser()->PluginsCacheDataLock));
+
+		RuntimeFBXCacheData = glTFRuntimeFBX::GetCacheData(Asset);
+		if (!RuntimeFBXCacheData)
+		{
+			return nullptr;
+		}
+	}
+
+	ufbx_anim_stack* FoundAnim = nullptr;
+
+	for (int32 AnimStackIndex = 0; AnimStackIndex < RuntimeFBXCacheData->Scene->anim_stacks.count; AnimStackIndex++)
+	{
+		ufbx_anim_stack* AnimStack = RuntimeFBXCacheData->Scene->anim_stacks.data[AnimStackIndex];
+
+		if (AnimStack->element_id == FBXAnim.Id)
+		{
+			FoundAnim = AnimStack;
+			break;
+		}
+	}
+
+	if (!FoundAnim)
+	{
+		return nullptr;
+	}
+
+	const float Duration = FoundAnim->time_end - FoundAnim->time_begin;
+	const int32 NumFrames = SkeletalAnimationConfig.FramesPerSecond * Duration;
+	const float Delta = Duration / NumFrames;
+
+	FglTFRuntimePoseTracksMap PosesMap;
+	TMap<FName, TArray<TPair<float, float>>> MorphTargetCurves;
+
+	const int32 BonesNum = SkeletalMesh->GetRefSkeleton().GetNum();
+
+	for (int32 BoneIndex = 0; BoneIndex < BonesNum; BoneIndex++)
+	{
+		const FString BoneName = SkeletalMesh->GetRefSkeleton().GetBoneName(BoneIndex).ToString();
+
+		if (!RuntimeFBXCacheData->NodesNamesMap.Contains(BoneName))
+		{
+			continue;
+		}
+
+		ufbx_node* BoneNode = RuntimeFBXCacheData->NodesNamesMap[BoneName];
+
+		float Time = FoundAnim->time_begin;
+
+		FRawAnimSequenceTrack Track;
+		for (int32 FrameIndex = 0; FrameIndex < NumFrames; FrameIndex++)
+		{
+			FTransform Transform = glTFRuntimeFBX::GetTransform(Asset, ufbx_evaluate_transform(FoundAnim->anim, BoneNode, Time));
+			Track.PosKeys.Add(FVector3f(Transform.GetLocation()));
+			Track.RotKeys.Add(FQuat4f(Transform.GetRotation()));
+			Track.ScaleKeys.Add(FVector3f(Transform.GetScale3D()));
+			Time += Delta;
+		}
+
+		PosesMap.Add(BoneName, MoveTemp(Track));
 	}
 
 	return Asset->GetParser()->LoadSkeletalAnimationFromTracksAndMorphTargets(SkeletalMesh, PosesMap, MorphTargetCurves, Duration, SkeletalAnimationConfig);
@@ -685,8 +810,6 @@ bool UglTFRuntimeFBXFunctionLibrary::LoadFBXAsRuntimeLODByNode(UglTFRuntimeAsset
 		MaterialsConfig = &SkeletalMeshMaterialsConfig;
 	}
 
-	
-
 	for (uint32 PrimitiveIndex = 0; PrimitiveIndex < NumMaterials; PrimitiveIndex++)
 	{
 		FglTFRuntimePrimitive& Primitive = Primitives[PrimitiveIndex];
@@ -730,7 +853,7 @@ bool UglTFRuntimeFBXFunctionLibrary::LoadFBXAsRuntimeLODByNode(UglTFRuntimeAsset
 		{
 			MaterialIndex = Mesh->face_material.data[FaceIndex];
 		}
-		
+
 		if (Primitives.IsValidIndex(MaterialIndex))
 		{
 			FglTFRuntimePrimitive& Primitive = Primitives[MaterialIndex];
@@ -790,7 +913,7 @@ bool UglTFRuntimeFBXFunctionLibrary::LoadFBXAsRuntimeLODByNode(UglTFRuntimeAsset
 
 				if (Mesh->vertex_normal.exists)
 				{
-					ufbx_vec3 Normal = ufbx_get_vertex_vec3(&Mesh->vertex_normal, Index);
+					const ufbx_vec3 Normal = ufbx_get_vertex_vec3(&Mesh->vertex_normal, Index);
 					if (bIsSkeletal)
 					{
 						Primitive.Normals.Add(glTFRuntimeFBX::GetTransform(Asset, Node->local_transform).TransformVector(Asset->GetParser()->TransformVector(FVector(Normal.x, Normal.y, Normal.z))));
@@ -803,8 +926,14 @@ bool UglTFRuntimeFBXFunctionLibrary::LoadFBXAsRuntimeLODByNode(UglTFRuntimeAsset
 
 				if (Mesh->vertex_uv.exists)
 				{
-					ufbx_vec2 UV = ufbx_get_vertex_vec2(&Mesh->vertex_uv, Index);
+					const ufbx_vec2 UV = ufbx_get_vertex_vec2(&Mesh->vertex_uv, Index);
 					Primitive.UVs[0].Add(FVector2D(UV.x, 1 - UV.y));
+				}
+
+				if (Mesh->vertex_color.exists)
+				{
+					const ufbx_vec4 Color = ufbx_get_vertex_vec4(&Mesh->vertex_color, Index);
+					Primitive.Colors.Add(FVector4(Color.x, Color.y, Color.z, Color.w));
 				}
 
 				Primitive.Indices.Add(Primitive.Positions.Num() - 1);

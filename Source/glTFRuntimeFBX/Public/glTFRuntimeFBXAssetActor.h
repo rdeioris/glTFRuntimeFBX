@@ -11,6 +11,7 @@
 UENUM(BlueprintType)
 enum class EglTFRuntimeFBXAssetActorDefaultAnimation : uint8
 {
+	Default,
 	First,
 	Last,
 	Shortest,
