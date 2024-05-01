@@ -2,6 +2,8 @@
 
 This is an extension for glTFRuntime allowing the load of FBX assets.
 
+![HeatFBX](https://github.com/rdeioris/glTFRuntimeFBX/assets/2234592/ba4ec16f-f5b7-4f31-8136-c5ad16ddab08)
+
 Currently the following features are supported:
 
 * Static Meshes
