@@ -52,26 +52,42 @@ The glTFRuntimeFBXAssetActor uses those functions to implement its whole logic.
 
 There are two main 'Objects' (well, actually they are Structs) to deal with:
 
-* FBXNode: represents a node in the FBX asset, it is the basic block for the hiearchy (nodes can be plain transforms/locators, meshes, skeletons, cameras, lights...)
-* FBXAnim: represents an animation, multiple animations can be exposed in the same asset
+* FBXNode (FglTFRuntimeFBXNode): represents a node in the FBX asset, it is the basic block for the hiearchy (nodes can be plain transforms/locators, meshes, skeletons, cameras, lights...)
+* FBXAnim (FglTFRuntimeFBXAnim): represents an animation, multiple animations can be exposed in the same asset
 
 ```cpp
 static FglTFRuntimeFBXNode GetFBXRootNode(UglTFRuntimeAsset* Asset);
+```
 
+```cpp
 static TArray<FglTFRuntimeFBXNode> GetFBXNodes(UglTFRuntimeAsset* Asset);
+```
 
+```cpp
 static TArray<FglTFRuntimeFBXNode> GetFBXNodeChildren(UglTFRuntimeAsset* Asset, const FglTFRuntimeFBXNode& FBXNode);
+```
 
+```cpp
 static TArray<FglTFRuntimeFBXAnim> GetFBXAnimations(UglTFRuntimeAsset* Asset);
+```
 
+```cpp
 static bool GetFBXDefaultAnimation(UglTFRuntimeAsset* Asset, FglTFRuntimeFBXAnim& FBXAnim);
+```
 
+```cpp
 static bool IsFBXNodeBone(UglTFRuntimeAsset* Asset, const FglTFRuntimeFBXNode& FBXNode);
+```
 
+```cpp
 static bool LoadFBXAsRuntimeLODByNode(UglTFRuntimeAsset* Asset, const FglTFRuntimeFBXNode& FBXNode, FglTFRuntimeMeshLOD& RuntimeLOD, const FglTFRuntimeMaterialsConfig& StaticMeshMaterialsConfig, const FglTFRuntimeMaterialsConfig& SkeletalMeshMaterialsConfig);
+```
 
+```cpp
 static UAnimSequence* LoadFBXAnimAsSkeletalMeshAnimation(UglTFRuntimeAsset* Asset, const FglTFRuntimeFBXAnim& FBXAnim, const FglTFRuntimeFBXNode& FBXNode, USkeletalMesh* SkeletalMesh, const FglTFRuntimeSkeletalAnimationConfig& SkeletalAnimationConfig);
+```
 
+```cpp
 static UAnimSequence* LoadFBXExternalAnimAsSkeletalMeshAnimation(UglTFRuntimeAsset* Asset, const FglTFRuntimeFBXAnim& FBXAnim, USkeletalMesh* SkeletalMesh, const FglTFRuntimeSkeletalAnimationConfig& SkeletalAnimationConfig);
 ```
 
