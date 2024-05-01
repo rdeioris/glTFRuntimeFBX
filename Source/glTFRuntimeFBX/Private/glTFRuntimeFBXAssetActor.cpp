@@ -134,9 +134,10 @@ void AglTFRuntimeFBXAssetActor::ProcessNode(USceneComponent* CurrentParentCompon
 	if (FBXNode.bHasMesh)
 	{
 		FglTFRuntimeMeshLOD LOD;
-		if (UglTFRuntimeFBXFunctionLibrary::LoadFBXAsRuntimeLODByNode(Asset, FBXNode, LOD, StaticMeshConfig.MaterialsConfig, SkeletalMeshConfig.MaterialsConfig))
+		bool bIsSkeletal = false;
+		if (UglTFRuntimeFBXFunctionLibrary::LoadFBXAsRuntimeLODByNode(Asset, FBXNode, LOD, bIsSkeletal, StaticMeshConfig.MaterialsConfig, SkeletalMeshConfig.MaterialsConfig))
 		{
-			if (LOD.Skeleton.Num() > 0)
+			if (bIsSkeletal)
 			{
 				USkeletalMeshComponent* NewSkeletalMeshComponent = NewObject<USkeletalMeshComponent>(this, GetSafeNodeName<USkeletalMeshComponent>(FBXNode));
 				USkeletalMesh* SkeletalMesh = Asset->LoadSkeletalMeshFromRuntimeLODs({ LOD }, -1, SkeletalMeshConfig);

@@ -335,6 +335,43 @@ TArray<FglTFRuntimeFBXNode> UglTFRuntimeFBXFunctionLibrary::GetFBXNodes(UglTFRun
 	return Nodes;
 }
 
+TArray<FglTFRuntimeFBXNode> UglTFRuntimeFBXFunctionLibrary::GetFBXNodesMeshes(UglTFRuntimeAsset* Asset)
+{
+	TArray<FglTFRuntimeFBXNode> Nodes;
+
+	if (!Asset)
+	{
+		return Nodes;
+	}
+
+	TSharedPtr<FglTFRuntimeFBXCacheData> RuntimeFBXCacheData = nullptr;
+	{
+		FScopeLock Lock(&(Asset->GetParser()->PluginsCacheDataLock));
+
+		RuntimeFBXCacheData = glTFRuntimeFBX::GetCacheData(Asset);
+		if (!RuntimeFBXCacheData)
+		{
+			return Nodes;
+		}
+	}
+
+	for (int32 NodeIndex = 0; NodeIndex < RuntimeFBXCacheData->Scene->nodes.count; NodeIndex++)
+	{
+		FglTFRuntimeFBXNode FBXNode;
+		ufbx_node* Node = RuntimeFBXCacheData->Scene->nodes.data[NodeIndex];
+		if (!Node->mesh)
+		{
+			continue;
+		}
+
+		glTFRuntimeFBX::FillNode(Asset, Node, FBXNode);
+
+		Nodes.Add(MoveTemp(FBXNode));
+	}
+
+	return Nodes;
+}
+
 FglTFRuntimeFBXNode UglTFRuntimeFBXFunctionLibrary::GetFBXRootNode(UglTFRuntimeAsset* Asset)
 {
 	FglTFRuntimeFBXNode FBXNode;
@@ -669,7 +706,7 @@ UAnimSequence* UglTFRuntimeFBXFunctionLibrary::LoadFBXExternalAnimAsSkeletalMesh
 	return Asset->GetParser()->LoadSkeletalAnimationFromTracksAndMorphTargets(SkeletalMesh, PosesMap, MorphTargetCurves, Duration, SkeletalAnimationConfig);
 }
 
-bool UglTFRuntimeFBXFunctionLibrary::LoadFBXAsRuntimeLODByNode(UglTFRuntimeAsset* Asset, const FglTFRuntimeFBXNode& FBXNode, FglTFRuntimeMeshLOD& RuntimeLOD, const FglTFRuntimeMaterialsConfig& StaticMeshMaterialsConfig, const FglTFRuntimeMaterialsConfig& SkeletalMeshMaterialsConfig)
+bool UglTFRuntimeFBXFunctionLibrary::LoadFBXAsRuntimeLODByNode(UglTFRuntimeAsset* Asset, const FglTFRuntimeFBXNode& FBXNode, FglTFRuntimeMeshLOD& RuntimeLOD, bool& bIsSkeletal, const FglTFRuntimeMaterialsConfig& StaticMeshMaterialsConfig, const FglTFRuntimeMaterialsConfig& SkeletalMeshMaterialsConfig)
 {
 	if (!Asset)
 	{
@@ -803,7 +840,7 @@ bool UglTFRuntimeFBXFunctionLibrary::LoadFBXAsRuntimeLODByNode(UglTFRuntimeAsset
 
 	Primitives.AddDefaulted(NumMaterials);
 
-	const bool bIsSkeletal = JointsWeightsMap.Num() > 0;
+	bIsSkeletal = JointsWeightsMap.Num() > 0;
 
 	if (bIsSkeletal)
 	{
