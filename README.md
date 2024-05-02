@@ -1,6 +1,6 @@
 # FBX Loader for glTFRuntime
 
-This is an extension for glTFRuntime (https://github.com/rdeioris/glTFRuntime) allowing the load of FBX assets.
+This is an extension for glTFRuntime (https://github.com/rdeioris/glTFRuntime) adding support for FBX assets.
 
 ![HeatFBX](https://github.com/rdeioris/glTFRuntimeFBX/assets/2234592/ba4ec16f-f5b7-4f31-8136-c5ad16ddab08)
 
