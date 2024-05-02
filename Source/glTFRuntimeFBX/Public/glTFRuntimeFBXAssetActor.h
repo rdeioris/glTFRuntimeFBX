@@ -24,8 +24,8 @@ UCLASS()
 class GLTFRUNTIMEFBX_API AglTFRuntimeFBXAssetActor : public AActor
 {
 	GENERATED_BODY()
-	
-public:	
+
+public:
 	// Sets default values for this actor's properties
 	AglTFRuntimeFBXAssetActor();
 
@@ -41,7 +41,7 @@ protected:
 
 	void ProcessNode(USceneComponent* CurrentParentComponent, const FglTFRuntimeFBXNode& FBXNode, const FName SocketName);
 
-public:	
+public:
 	// Called every frame
 	virtual void Tick(float DeltaTime) override;
 
@@ -66,8 +66,23 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "glTFRuntime|FBX")
 	void PlayFBXAnimation(const FglTFRuntimeFBXAnim& FBXAnim, const bool bLoop);
 
+	UFUNCTION(BlueprintCallable, Category = "glTFRuntime|FBX")
+	UAnimSequence* LoadFBXAnimation(USkeletalMeshComponent* SkeletalMeshComponent, const FglTFRuntimeFBXAnim& FBXAnim);
+
+	UFUNCTION(BlueprintCallable, Category = "glTFRuntime|FBX")
+	UAnimSequence* LoadFBXAnimationByName(USkeletalMeshComponent* SkeletalMeshComponent, const FString& AnimationName);
+
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Meta = (ExposeOnSpawn = true), Category = "glTFRuntime|FBX")
 	bool bDefaultAnimationLoop;
+
+	UFUNCTION(BlueprintNativeEvent, Category = "glTFRuntime|FBX", meta = (DisplayName = "On StaticMeshComponent Created"))
+	void ReceiveOnStaticMeshComponentCreated(UStaticMeshComponent* StaticMeshComponent);
+
+	UFUNCTION(BlueprintNativeEvent, Category = "glTFRuntime|FBX", meta = (DisplayName = "On SkeletalMeshComponent Created"))
+	void ReceiveOnSkeletalMeshComponentCreated(USkeletalMeshComponent* SkeletalMeshComponent);
+
+	UFUNCTION(BlueprintNativeEvent, Category = "glTFRuntime|FBX", meta = (DisplayName = "On Scenes Loaded"))
+	void ReceiveOnScenesLoaded();
 
 
 protected:

@@ -108,6 +108,8 @@ void AglTFRuntimeFBXAssetActor::BeginPlay()
 
 
 	UE_LOG(LogGLTFRuntime, Log, TEXT("Asset loaded in %f seconds"), FPlatformTime::Seconds() - LoadingStartTime);
+
+	ReceiveOnScenesLoaded();
 }
 
 // Called every frame
@@ -146,6 +148,7 @@ void AglTFRuntimeFBXAssetActor::ProcessNode(USceneComponent* CurrentParentCompon
 					NewSkeletalMeshComponent->SetSkeletalMesh(SkeletalMesh);
 					DiscoveredSkeletalMeshes.Add(TPair<USkeletalMeshComponent*, FglTFRuntimeFBXNode>(NewSkeletalMeshComponent, FBXNode));
 				}
+				ReceiveOnSkeletalMeshComponentCreated(NewSkeletalMeshComponent);
 				SceneComponent = NewSkeletalMeshComponent;
 			}
 			else
@@ -156,6 +159,7 @@ void AglTFRuntimeFBXAssetActor::ProcessNode(USceneComponent* CurrentParentCompon
 				{
 					NewStaticMeshComponent->SetStaticMesh(StaticMesh);
 				}
+				ReceiveOnStaticMeshComponentCreated(NewStaticMeshComponent);
 				SceneComponent = NewStaticMeshComponent;
 			}
 		}
@@ -223,4 +227,51 @@ void AglTFRuntimeFBXAssetActor::PlayFBXAnimation(const FglTFRuntimeFBXAnim& FBXA
 			}
 		}
 	}
+}
+
+UAnimSequence* AglTFRuntimeFBXAssetActor::LoadFBXAnimation(USkeletalMeshComponent* SkeletalMeshComponent, const FglTFRuntimeFBXAnim& FBXAnim)
+{
+	if (FBXAnim.Duration > 0)
+	{
+		for (const TPair<USkeletalMeshComponent*, FglTFRuntimeFBXNode>& Pair : DiscoveredSkeletalMeshes)
+		{
+			if (Pair.Key == SkeletalMeshComponent)
+			{
+#if ENGINE_MAJOR_VERSION >= 5
+				return UglTFRuntimeFBXFunctionLibrary::LoadFBXAnimAsSkeletalMeshAnimation(Asset, FBXAnim, Pair.Value, SkeletalMeshComponent->GetSkeletalMeshAsset(), SkeletalAnimationConfig);
+#else
+				return UglTFRuntimeFBXFunctionLibrary::LoadFBXAnimAsSkeletalMeshAnimation(Asset, FBXAnim, Pair.Value, SkeletalMeshComponent->SkeletalMesh, SkeletalAnimationConfig);
+#endif
+			}
+		}
+	}
+	return nullptr;
+}
+
+UAnimSequence* AglTFRuntimeFBXAssetActor::LoadFBXAnimationByName(USkeletalMeshComponent* SkeletalMeshComponent, const FString& AnimationName)
+{
+	for (const FglTFRuntimeFBXAnim& FBXAnim : GetFBXAnimations())
+	{
+		if (FBXAnim.Name == AnimationName)
+		{
+			return LoadFBXAnimation(SkeletalMeshComponent, FBXAnim);
+		}
+	}
+
+	return nullptr;
+}
+
+void AglTFRuntimeFBXAssetActor::ReceiveOnStaticMeshComponentCreated_Implementation(UStaticMeshComponent* StaticMeshComponent)
+{
+
+}
+
+void AglTFRuntimeFBXAssetActor::ReceiveOnSkeletalMeshComponentCreated_Implementation(USkeletalMeshComponent* SkeletalMeshComponent)
+{
+
+}
+
+void AglTFRuntimeFBXAssetActor::ReceiveOnScenesLoaded_Implementation()
+{
+
 }
