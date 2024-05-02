@@ -144,7 +144,7 @@ void AglTFRuntimeFBXAssetActor::ProcessNode(USceneComponent* CurrentParentCompon
 				if (SkeletalMesh)
 				{
 					NewSkeletalMeshComponent->SetSkeletalMesh(SkeletalMesh);
-					DiscoveredSkeletalMeshes.Add({ NewSkeletalMeshComponent, FBXNode });
+					DiscoveredSkeletalMeshes.Add(TPair<USkeletalMeshComponent*, FglTFRuntimeFBXNode>(NewSkeletalMeshComponent, FBXNode));
 				}
 				SceneComponent = NewSkeletalMeshComponent;
 			}
@@ -179,7 +179,7 @@ void AglTFRuntimeFBXAssetActor::ProcessNode(USceneComponent* CurrentParentCompon
 		}
 		else
 		{
-			DiscoveredAttachments.Add({ SceneComponent, SocketName });
+			DiscoveredAttachments.Add(TPair<USceneComponent*, FName>(SceneComponent, SocketName));
 		}
 		SceneComponent->SetRelativeTransform(FBXNode.Transform);
 	}
@@ -209,7 +209,11 @@ void AglTFRuntimeFBXAssetActor::PlayFBXAnimation(const FglTFRuntimeFBXAnim& FBXA
 	{
 		for (const TPair<USkeletalMeshComponent*, FglTFRuntimeFBXNode>& Pair : DiscoveredSkeletalMeshes)
 		{
+#if ENGINE_MAJOR_VERSION >= 5
 			UAnimSequence* NewAnimSequence = UglTFRuntimeFBXFunctionLibrary::LoadFBXAnimAsSkeletalMeshAnimation(Asset, FBXAnim, Pair.Value, Pair.Key->GetSkeletalMeshAsset(), SkeletalAnimationConfig);
+#else
+			UAnimSequence* NewAnimSequence = UglTFRuntimeFBXFunctionLibrary::LoadFBXAnimAsSkeletalMeshAnimation(Asset, FBXAnim, Pair.Value, Pair.Key->SkeletalMesh, SkeletalAnimationConfig);
+#endif
 			if (NewAnimSequence)
 			{
 				Pair.Key->AnimationData.AnimToPlay = NewAnimSequence;

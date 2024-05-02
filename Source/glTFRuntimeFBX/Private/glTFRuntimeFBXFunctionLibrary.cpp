@@ -1,6 +1,8 @@
 // Copyright 2023-2024 - Roberto De Ioris
 
 #include "glTFRuntimeFBXFunctionLibrary.h"
+#include "Runtime/Launch/Resources/Version.h"
+#include "UObject/StrongObjectPtr.h"
 THIRD_PARTY_INCLUDES_START
 #include "ufbx.h"
 THIRD_PARTY_INCLUDES_END
@@ -601,9 +603,15 @@ UAnimSequence* UglTFRuntimeFBXFunctionLibrary::LoadFBXAnimAsSkeletalMeshAnimatio
 			for (int32 FrameIndex = 0; FrameIndex < NumFrames; FrameIndex++)
 			{
 				FTransform Transform = glTFRuntimeFBX::GetTransform(Asset, ufbx_evaluate_transform(FoundAnim->anim, Cluster->bone_node, Time));
+#if ENGINE_MAJOR_VERSION >= 5
 				Track.PosKeys.Add(FVector3f(Transform.GetLocation()));
 				Track.RotKeys.Add(FQuat4f(Transform.GetRotation()));
 				Track.ScaleKeys.Add(FVector3f(Transform.GetScale3D()));
+#else
+				Track.PosKeys.Add(Transform.GetLocation());
+				Track.RotKeys.Add(Transform.GetRotation());
+				Track.ScaleKeys.Add(Transform.GetScale3D());
+#endif
 				Time += Delta;
 			}
 
@@ -621,7 +629,7 @@ UAnimSequence* UglTFRuntimeFBXFunctionLibrary::LoadFBXAnimAsSkeletalMeshAnimatio
 			for (int32 FrameIndex = 0; FrameIndex < NumFrames; FrameIndex++)
 			{
 				const float Weight = ufbx_evaluate_blend_weight(FoundAnim->anim, FoundNode->mesh->blend_deformers.data[BlendDeformerIndex]->channels.data[BlendDeformerChannelIndex], Time);
-				MorphTargetValues.Add({ Time, Weight });
+				MorphTargetValues.Add(TPair<float, float>(Time, Weight));
 				Time += Delta;
 			}
 
@@ -694,9 +702,15 @@ UAnimSequence* UglTFRuntimeFBXFunctionLibrary::LoadFBXExternalAnimAsSkeletalMesh
 		for (int32 FrameIndex = 0; FrameIndex < NumFrames; FrameIndex++)
 		{
 			FTransform Transform = glTFRuntimeFBX::GetTransform(Asset, ufbx_evaluate_transform(FoundAnim->anim, BoneNode, Time));
+#if ENGINE_MAJOR_VERSION >= 5
 			Track.PosKeys.Add(FVector3f(Transform.GetLocation()));
 			Track.RotKeys.Add(FQuat4f(Transform.GetRotation()));
 			Track.ScaleKeys.Add(FVector3f(Transform.GetScale3D()));
+#else
+			Track.PosKeys.Add(Transform.GetLocation());
+			Track.RotKeys.Add(Transform.GetRotation());
+			Track.ScaleKeys.Add(Transform.GetScale3D());
+#endif
 			Time += Delta;
 		}
 
@@ -805,7 +819,7 @@ bool UglTFRuntimeFBXFunctionLibrary::LoadFBXAsRuntimeLODByNode(UglTFRuntimeAsset
 						JointsWeightsMap.Add(VertexIndexValue);
 					}
 
-					JointsWeightsMap[VertexIndexValue].Add({ BoneIndex, VertexWeight });
+					JointsWeightsMap[VertexIndexValue].Add(TPair<int32, float>(BoneIndex, VertexWeight));
 				}
 			}
 		}
