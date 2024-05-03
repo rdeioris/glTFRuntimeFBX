@@ -134,11 +134,11 @@ The system assumes that every animation curve has the same name of a bone in the
 
 ## Materials handling
 
-Unfortunately the vast majority of FBX assets around use the Phong shading model, so a pretty raw conversion need to be done.
+Unfortunately the vast majority of FBX assets around use the Phong shading model, so a pretty raw conversion needs to be done.
 
 Most of the work is done by the ufbx library, but it is not enough for a robust material management.
 
-In addition to this the texture handling is extremely messy (all of use experienced the missing textures in an imported FBX :( ).
+In addition to this the textures handling is extremely messy (you all experienced the missing textures in an imported FBX :( ).
 
 The best approach is to embed the textures in the FBX itself, or to put the fbx and the textures in a zip file (that you can directly load).
 
