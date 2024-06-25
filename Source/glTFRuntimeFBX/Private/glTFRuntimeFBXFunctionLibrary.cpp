@@ -720,6 +720,73 @@ UAnimSequence* UglTFRuntimeFBXFunctionLibrary::LoadFBXExternalAnimAsSkeletalMesh
 	return Asset->GetParser()->LoadSkeletalAnimationFromTracksAndMorphTargets(SkeletalMesh, PosesMap, MorphTargetCurves, Duration, SkeletalAnimationConfig);
 }
 
+bool UglTFRuntimeFBXFunctionLibrary::FillFBXSkinDeformer(UglTFRuntimeAsset* Asset, ufbx_skin_deformer* SkinDeformer, TArray<FglTFRuntimeBone>& Skeleton, TMap<uint32, TArray<TPair<int32, float>>>& JointsWeightsMap, int32& JointsWeightsGroups)
+{
+	TSet<FString> Bones;
+
+	ufbx_node* RootNode = nullptr;
+
+	TMap<FString, int32> BonesMap;
+
+	for (int32 ClusterIndex = 0; ClusterIndex < SkinDeformer->clusters.count; ClusterIndex++)
+	{
+		ufbx_skin_cluster* Cluster = SkinDeformer->clusters.data[ClusterIndex];
+
+		if (!RootNode)
+		{
+			RootNode = Cluster->bone_node;
+			ufbx_node* Parent = RootNode->parent;
+			while (Parent && !Parent->is_root)
+			{
+
+				RootNode = Parent;
+
+				Parent = Parent->parent;
+			}
+
+			bool bRootProcessed = false;
+			glTFRuntimeFBX::FillSkeleton(Asset, SkinDeformer, RootNode, INDEX_NONE, Skeleton, BonesMap, bRootProcessed);
+		}
+
+		const FString BoneName = UTF8_TO_TCHAR(Cluster->bone_node->name.data);
+
+		if (BonesMap.Contains(BoneName))
+		{
+			const int32 BoneIndex = BonesMap[BoneName];
+
+			for (uint32 VertexIndex = 0; VertexIndex < Cluster->vertices.count; VertexIndex++)
+			{
+				const uint32 VertexIndexValue = Cluster->vertices.data[VertexIndex];
+				const float VertexWeight = Cluster->weights.data[VertexIndex];
+				if (!JointsWeightsMap.Contains(VertexIndexValue))
+				{
+					JointsWeightsMap.Add(VertexIndexValue);
+				}
+
+				JointsWeightsMap[VertexIndexValue].Add(TPair<int32, float>(BoneIndex, VertexWeight));
+			}
+		}
+	}
+
+	int32 MaxBoneInfluences = 4;
+
+	for (const TPair<uint32, TArray<TPair<int32, float>>>& Pair : JointsWeightsMap)
+	{
+		if (Pair.Value.Num() > MaxBoneInfluences)
+		{
+			MaxBoneInfluences = Pair.Value.Num();
+		}
+	}
+
+	JointsWeightsGroups = MaxBoneInfluences / 4;
+	if (MaxBoneInfluences % 4 != 0)
+	{
+		JointsWeightsGroups++;
+	}
+
+	return true;
+}
+
 bool UglTFRuntimeFBXFunctionLibrary::LoadFBXAsRuntimeLODByNode(UglTFRuntimeAsset* Asset, const FglTFRuntimeFBXNode& FBXNode, FglTFRuntimeMeshLOD& RuntimeLOD, bool& bIsSkeletal, const FglTFRuntimeMaterialsConfig& StaticMeshMaterialsConfig, const FglTFRuntimeMaterialsConfig& SkeletalMeshMaterialsConfig)
 {
 	if (!Asset)
@@ -754,11 +821,466 @@ bool UglTFRuntimeFBXFunctionLibrary::LoadFBXAsRuntimeLODByNode(UglTFRuntimeAsset
 	}
 
 	TMap<uint32, TArray<TPair<int32, float>>> JointsWeightsMap;
+	int32 JointsWeightsGroups = 1;
+
+
+	// skeletal mesh ?
+	if (Mesh->skin_deformers.count > 0)
+	{
+		if (!FillFBXSkinDeformer(Asset, Mesh->skin_deformers.data[0], RuntimeLOD.Skeleton, JointsWeightsMap, JointsWeightsGroups))
+		{
+			return false;
+		}
+	}
+
+	bIsSkeletal = JointsWeightsMap.Num() > 0;
 
 	const FglTFRuntimeMaterialsConfig* MaterialsConfig = &StaticMeshMaterialsConfig;
 
-	int32 MaxBoneInfluences = 4;
+	if (bIsSkeletal)
+	{
+		MaterialsConfig = &SkeletalMeshMaterialsConfig;
+	}
+
+	TArray<FglTFRuntimePrimitive> Primitives;
+
+	if (!FillFBXPrimitives(Asset, RuntimeFBXCacheData, Node, 0, Primitives, JointsWeightsMap, JointsWeightsGroups, *MaterialsConfig))
+	{
+		return false;
+	}
+
+	// ensure only non-empty primitives are added
+	for (FglTFRuntimePrimitive& Primitive : Primitives)
+	{
+		if (Primitive.Indices.Num() > 0)
+		{
+			RuntimeLOD.Primitives.Add(MoveTemp(Primitive));
+		}
+	}
+
+	return true;
+}
+
+bool UglTFRuntimeFBXFunctionLibrary::LoadAndMergeFBXAsRuntimeLODsGroupBySkinDeformer(UglTFRuntimeAsset* Asset, TArray<FglTFRuntimeMeshLOD>& RuntimeLODs, const FglTFRuntimeMaterialsConfig& SkeletalMeshMaterialsConfig)
+{
+
+	if (!Asset)
+	{
+		return false;
+	}
+
+	TSharedPtr<FglTFRuntimeFBXCacheData> RuntimeFBXCacheData = nullptr;
+	{
+		FScopeLock Lock(&(Asset->GetParser()->PluginsCacheDataLock));
+
+		RuntimeFBXCacheData = glTFRuntimeFBX::GetCacheData(Asset);
+		if (!RuntimeFBXCacheData)
+		{
+			return false;
+		}
+	}
+
+	struct FglTFRuntimeFBXNodeToMerge
+	{
+		TArray<FglTFRuntimeBone> Skeleton;
+		TMap<uint32, TArray<TPair<int32, float>>> JointsWeightsMap;
+		int32 JointsWeightsGroups;
+	};
+
+	TArray< FglTFRuntimeFBXNodeToMerge> DiscoveredSkinDeformers;
+
+	for (int32 SkinDeformerIndex = 0; SkinDeformerIndex < RuntimeFBXCacheData->Scene->skin_deformers.count; SkinDeformerIndex++)
+	{
+		FglTFRuntimeFBXNodeToMerge CurrentSkinDeformer;
+		CurrentSkinDeformer.JointsWeightsGroups = 1;
+		if (!FillFBXSkinDeformer(Asset, RuntimeFBXCacheData->Scene->skin_deformers.data[SkinDeformerIndex], CurrentSkinDeformer.Skeleton, CurrentSkinDeformer.JointsWeightsMap, CurrentSkinDeformer.JointsWeightsGroups))
+		{
+			return false;
+		}
+
+		DiscoveredSkinDeformers.Add(MoveTemp(CurrentSkinDeformer));
+	}
+
+	auto SkinDeformerIsCompatible = [](const TArray<FglTFRuntimeBone>& BaseSkeleton, const TArray<FglTFRuntimeBone>& CurrentSkeleton)
+		{
+			if (BaseSkeleton.Num() != CurrentSkeleton.Num())
+			{
+				return false;
+			}
+
+			for (int32 BoneIndex = 0; BoneIndex < BaseSkeleton.Num(); BoneIndex++)
+			{
+				if (BaseSkeleton[BoneIndex].ParentIndex != CurrentSkeleton[BoneIndex].ParentIndex)
+				{
+					return false;
+				}
+
+				if (BaseSkeleton[BoneIndex].BoneName != CurrentSkeleton[BoneIndex].BoneName)
+				{
+					return false;
+				}
+			}
+
+			return true;
+		};
+
+	TSet<int32> ProcessedSkinDeformers;
+	TArray<int32> SkinDeformerGroups;
+
+	for (int32 SkinDeformerIndex = 0; SkinDeformerIndex < DiscoveredSkinDeformers.Num(); SkinDeformerIndex++)
+	{
+		if (ProcessedSkinDeformers.Contains(SkinDeformerIndex))
+		{
+			continue;
+		}
+
+		SkinDeformerGroups.Add(SkinDeformerIndex);
+		ProcessedSkinDeformers.Add(SkinDeformerIndex);
+
+		for (int32 CheckSkinDeformerIndex = 0; CheckSkinDeformerIndex < DiscoveredSkinDeformers.Num(); CheckSkinDeformerIndex++)
+		{
+			if (CheckSkinDeformerIndex == SkinDeformerIndex)
+			{
+				continue;
+			}
+
+			if (ProcessedSkinDeformers.Contains(CheckSkinDeformerIndex))
+			{
+				continue;
+			}
+
+			if (SkinDeformerIsCompatible(DiscoveredSkinDeformers[SkinDeformerIndex].Skeleton, DiscoveredSkinDeformers[CheckSkinDeformerIndex].Skeleton))
+			{
+				ProcessedSkinDeformers.Add(CheckSkinDeformerIndex);
+			}
+		}
+	}
+
+	for (const int32 SkinDeformerIndex : SkinDeformerGroups)
+	{
+		FglTFRuntimeMeshLOD LOD;
+		if (LoadAndMergeFBXAsRuntimeLODBySkinDeformer(Asset, SkinDeformerIndex, LOD, SkeletalMeshMaterialsConfig))
+		{
+			RuntimeLODs.Add(MoveTemp(LOD));
+		}
+	}
+
+	return true;
+}
+
+bool UglTFRuntimeFBXFunctionLibrary::LoadAndMergeFBXAsRuntimeLODByBiggestSkinDeformer(UglTFRuntimeAsset* Asset, FglTFRuntimeMeshLOD& RuntimeLOD, const FglTFRuntimeMaterialsConfig& SkeletalMeshMaterialsConfig)
+{
+	if (!Asset)
+	{
+		return false;
+	}
+
+	TSharedPtr<FglTFRuntimeFBXCacheData> RuntimeFBXCacheData = nullptr;
+	{
+		FScopeLock Lock(&(Asset->GetParser()->PluginsCacheDataLock));
+
+		RuntimeFBXCacheData = glTFRuntimeFBX::GetCacheData(Asset);
+		if (!RuntimeFBXCacheData)
+		{
+			return false;
+		}
+	}
+
+	struct FglTFRuntimeFBXNodeToMerge
+	{
+		FglTFRuntimeFBXNode FBXNode;
+		TArray<FglTFRuntimeBone> Skeleton;
+		TMap<uint32, TArray<TPair<int32, float>>> JointsWeightsMap;
+		int32 JointsWeightsGroups;
+	};
+
+	int32 BiggestDeformerValue = -1;
+
+	TArray<FglTFRuntimeBone> BiggestSkeleton;
+
+	for (int32 SkinDeformerIndex = 0; SkinDeformerIndex < RuntimeFBXCacheData->Scene->skin_deformers.count; SkinDeformerIndex++)
+	{
+		FglTFRuntimeFBXNodeToMerge CurrentSkinDeformer;
+		CurrentSkinDeformer.JointsWeightsGroups = 1;
+		if (FillFBXSkinDeformer(Asset, RuntimeFBXCacheData->Scene->skin_deformers.data[SkinDeformerIndex], CurrentSkinDeformer.Skeleton, CurrentSkinDeformer.JointsWeightsMap, CurrentSkinDeformer.JointsWeightsGroups))
+		{
+			if (CurrentSkinDeformer.Skeleton.Num() > BiggestDeformerValue)
+			{
+				BiggestSkeleton = CurrentSkinDeformer.Skeleton;
+				BiggestDeformerValue = CurrentSkinDeformer.Skeleton.Num();
+			}
+		}
+	}
+
+	if (BiggestDeformerValue < 0 || BiggestSkeleton.Num() < 1)
+	{
+		return false;
+	}
+
+	RuntimeLOD.Skeleton = MoveTemp(BiggestSkeleton);
+
+	auto SkinDeformerIsCompatible = [](const TArray<FglTFRuntimeBone>& BaseSkeleton, const TArray<FglTFRuntimeBone>& CurrentSkeleton)
+		{
+			const int32 NumBones = FMath::Min(BaseSkeleton.Num(), CurrentSkeleton.Num());
+			if (NumBones <= 0)
+			{
+				return false;
+			}
+
+			for (int32 BoneIndex = 0; BoneIndex < NumBones; BoneIndex++)
+			{
+				if (BaseSkeleton[BoneIndex].ParentIndex != CurrentSkeleton[BoneIndex].ParentIndex)
+				{
+					return false;
+				}
+
+				if (BaseSkeleton[BoneIndex].BoneName != CurrentSkeleton[BoneIndex].BoneName)
+				{
+					return false;
+				}
+			}
+
+			return true;
+		};
+
+	const TArray<FglTFRuntimeFBXNode> FBXNodes = GetFBXNodesMeshes(Asset);
+
+	if (FBXNodes.Num() < 1)
+	{
+		return false;
+	}
+
+	TArray<FglTFRuntimeFBXNodeToMerge> NodesToMerge;
+
+	for (const FglTFRuntimeFBXNode& FBXNode : FBXNodes)
+	{
+		if (!RuntimeFBXCacheData->NodesMap.Contains(FBXNode.Id))
+		{
+			continue;
+		}
+
+		ufbx_node* Node = RuntimeFBXCacheData->NodesMap[FBXNode.Id];
+
+		ufbx_mesh* Mesh = Node->mesh;
+		if (!Mesh)
+		{
+			continue;
+		}
+
+		// skeletal mesh ?
+		if (Mesh->skin_deformers.count < 1)
+		{
+			continue;
+		}
+
+		FglTFRuntimeFBXNodeToMerge FBXNodeToMerge;
+		FBXNodeToMerge.FBXNode = FBXNode;
+		FBXNodeToMerge.JointsWeightsGroups = 1;
+
+		if (!FillFBXSkinDeformer(Asset, Mesh->skin_deformers.data[0], FBXNodeToMerge.Skeleton, FBXNodeToMerge.JointsWeightsMap, FBXNodeToMerge.JointsWeightsGroups))
+		{
+			continue;
+		}
+
+		if (!SkinDeformerIsCompatible(RuntimeLOD.Skeleton, FBXNodeToMerge.Skeleton))
+		{
+			continue;
+		}
+
+		NodesToMerge.Add(MoveTemp(FBXNodeToMerge));
+	}
+
+	if (NodesToMerge.Num() < 1)
+	{
+		return false;
+	}
+
+	TArray<FglTFRuntimePrimitive> Primitives;
+
+	for (const FglTFRuntimeFBXNodeToMerge& FBXNodeToMerge : NodesToMerge)
+	{
+		ufbx_node* Node = RuntimeFBXCacheData->NodesMap[FBXNodeToMerge.FBXNode.Id];
+
+		if (!FillFBXPrimitives(Asset, RuntimeFBXCacheData, Node, Primitives.Num(), Primitives, FBXNodeToMerge.JointsWeightsMap, FBXNodeToMerge.JointsWeightsGroups, SkeletalMeshMaterialsConfig))
+		{
+			return false;
+		}
+	}
+
+	// ensure only non-empty primitives are added
+	for (FglTFRuntimePrimitive& Primitive : Primitives)
+	{
+		if (Primitive.Indices.Num() > 0)
+		{
+			RuntimeLOD.Primitives.Add(MoveTemp(Primitive));
+		}
+	}
+
+	return true;
+}
+
+bool UglTFRuntimeFBXFunctionLibrary::LoadAndMergeFBXAsRuntimeLODBySkinDeformer(UglTFRuntimeAsset* Asset, const int32 SkinDeformerIndex, FglTFRuntimeMeshLOD& RuntimeLOD, const FglTFRuntimeMaterialsConfig& SkeletalMeshMaterialsConfig)
+{
+	if (!Asset)
+	{
+		return false;
+	}
+
+	TSharedPtr<FglTFRuntimeFBXCacheData> RuntimeFBXCacheData = nullptr;
+	{
+		FScopeLock Lock(&(Asset->GetParser()->PluginsCacheDataLock));
+
+		RuntimeFBXCacheData = glTFRuntimeFBX::GetCacheData(Asset);
+		if (!RuntimeFBXCacheData)
+		{
+			return false;
+		}
+	}
+
+	if (SkinDeformerIndex >= RuntimeFBXCacheData->Scene->skin_deformers.count)
+	{
+		return false;
+	}
+
+	TMap<uint32, TArray<TPair<int32, float>>> JointsWeightsMap;
 	int32 JointsWeightsGroups = 1;
+
+	if (!FillFBXSkinDeformer(Asset, RuntimeFBXCacheData->Scene->skin_deformers.data[SkinDeformerIndex], RuntimeLOD.Skeleton, JointsWeightsMap, JointsWeightsGroups))
+	{
+		return false;
+	}
+
+	struct FglTFRuntimeFBXNodeToMerge
+	{
+		FglTFRuntimeFBXNode FBXNode;
+		TArray<FglTFRuntimeBone> Skeleton;
+		TMap<uint32, TArray<TPair<int32, float>>> JointsWeightsMap;
+		int32 JointsWeightsGroups;
+	};
+
+	auto SkinDeformerIsCompatible = [](const TArray<FglTFRuntimeBone>& BaseSkeleton, const TArray<FglTFRuntimeBone>& CurrentSkeleton)
+		{
+			if (BaseSkeleton.Num() != CurrentSkeleton.Num())
+			{
+				return false;
+			}
+
+			for (int32 BoneIndex = 0; BoneIndex < BaseSkeleton.Num(); BoneIndex++)
+			{
+				if (BaseSkeleton[BoneIndex].ParentIndex != CurrentSkeleton[BoneIndex].ParentIndex)
+				{
+					return false;
+				}
+
+				if (BaseSkeleton[BoneIndex].BoneName != CurrentSkeleton[BoneIndex].BoneName)
+				{
+					return false;
+				}
+			}
+
+			return true;
+		};
+
+	const TArray<FglTFRuntimeFBXNode> FBXNodes = GetFBXNodesMeshes(Asset);
+
+	if (FBXNodes.Num() < 1)
+	{
+		return false;
+	}
+
+	TArray<FglTFRuntimeFBXNodeToMerge> NodesToMerge;
+
+	for (const FglTFRuntimeFBXNode& FBXNode : FBXNodes)
+	{
+		if (!RuntimeFBXCacheData->NodesMap.Contains(FBXNode.Id))
+		{
+			continue;
+		}
+
+		ufbx_node* Node = RuntimeFBXCacheData->NodesMap[FBXNode.Id];
+
+		ufbx_mesh* Mesh = Node->mesh;
+		if (!Mesh)
+		{
+			continue;
+		}
+
+		// skeletal mesh ?
+		if (Mesh->skin_deformers.count < 1)
+		{
+			continue;
+		}
+
+		FglTFRuntimeFBXNodeToMerge FBXNodeToMerge;
+		FBXNodeToMerge.FBXNode = FBXNode;
+		FBXNodeToMerge.JointsWeightsGroups = 1;
+
+		if (!FillFBXSkinDeformer(Asset, Mesh->skin_deformers.data[0], FBXNodeToMerge.Skeleton, FBXNodeToMerge.JointsWeightsMap, FBXNodeToMerge.JointsWeightsGroups))
+		{
+			continue;
+		}
+
+		if (!SkinDeformerIsCompatible(RuntimeLOD.Skeleton, FBXNodeToMerge.Skeleton))
+		{
+			continue;
+		}
+
+		NodesToMerge.Add(MoveTemp(FBXNodeToMerge));
+	}
+
+	if (NodesToMerge.Num() < 1)
+	{
+		return false;
+	}
+
+	TArray<FglTFRuntimePrimitive> Primitives;
+
+	for (const FglTFRuntimeFBXNodeToMerge& FBXNodeToMerge : NodesToMerge)
+	{
+		ufbx_node* Node = RuntimeFBXCacheData->NodesMap[FBXNodeToMerge.FBXNode.Id];
+
+		if (!FillFBXPrimitives(Asset, RuntimeFBXCacheData, Node, Primitives.Num(), Primitives, FBXNodeToMerge.JointsWeightsMap, FBXNodeToMerge.JointsWeightsGroups, SkeletalMeshMaterialsConfig))
+		{
+			return false;
+		}
+	}
+
+	// ensure only non-empty primitives are added
+	for (FglTFRuntimePrimitive& Primitive : Primitives)
+	{
+		if (Primitive.Indices.Num() > 0)
+		{
+			RuntimeLOD.Primitives.Add(MoveTemp(Primitive));
+		}
+	}
+
+	return true;
+
+}
+
+bool UglTFRuntimeFBXFunctionLibrary::FillFBXPrimitives(UglTFRuntimeAsset* Asset, TSharedPtr<FglTFRuntimeFBXCacheData> RuntimeFBXCacheData, struct ufbx_node* Node, const int32 PrimitiveBase, TArray<FglTFRuntimePrimitive>& Primitives, const TMap<uint32, TArray<TPair<int32, float>>>& JointsWeightsMap, const int32 JointsWeightsGroups, const FglTFRuntimeMaterialsConfig& MaterialsConfig)
+{
+	ufbx_mesh* Mesh = Node->mesh;
+	if (!Mesh)
+	{
+		return false;
+	}
+
+	uint32 NumTriangleIndices = Mesh->max_face_triangles * 3;
+	TArray<uint32> TriangleIndices;
+	TriangleIndices.AddUninitialized(NumTriangleIndices);
+
+	const bool bIsSkeletal = JointsWeightsMap.Num() > 0;
+
+
+	uint32 NumMaterials = Node->materials.count;
+	if (NumMaterials == 0)
+	{
+		// fallback to the default material
+		NumMaterials = 1;
+	}
+
+	Primitives.AddDefaulted(NumMaterials);
 
 	TMap<FString, ufbx_blend_shape*> MorphTargets;
 
@@ -771,107 +1293,18 @@ bool UglTFRuntimeFBXFunctionLibrary::LoadFBXAsRuntimeLODByNode(UglTFRuntimeAsset
 		}
 	}
 
-	// skeletal mesh ?
-	if (Mesh->skin_deformers.count > 0)
-	{
-		ufbx_skin_deformer* Skin = Mesh->skin_deformers.data[0];
 
-		TArray<FglTFRuntimeBone>& Skeleton = RuntimeLOD.Skeleton;
-
-		TSet<FString> Bones;
-
-		ufbx_node* RootNode = nullptr;
-
-		TMap<FString, int32> BonesMap;
-
-		for (int32 ClusterIndex = 0; ClusterIndex < Skin->clusters.count; ClusterIndex++)
-		{
-			ufbx_skin_cluster* Cluster = Skin->clusters.data[ClusterIndex];
-
-			if (!RootNode)
-			{
-				RootNode = Cluster->bone_node;
-				ufbx_node* Parent = RootNode->parent;
-				while (Parent && !Parent->is_root)
-				{
-
-					RootNode = Parent;
-
-					Parent = Parent->parent;
-				}
-
-				bool bRootProcessed = false;
-				glTFRuntimeFBX::FillSkeleton(Asset, Skin, RootNode, INDEX_NONE, Skeleton, BonesMap, bRootProcessed);
-			}
-
-			const FString BoneName = UTF8_TO_TCHAR(Cluster->bone_node->name.data);
-
-			if (BonesMap.Contains(BoneName))
-			{
-				const int32 BoneIndex = BonesMap[BoneName];
-
-				for (uint32 VertexIndex = 0; VertexIndex < Cluster->vertices.count; VertexIndex++)
-				{
-					const uint32 VertexIndexValue = Cluster->vertices.data[VertexIndex];
-					const float VertexWeight = Cluster->weights.data[VertexIndex];
-					if (!JointsWeightsMap.Contains(VertexIndexValue))
-					{
-						JointsWeightsMap.Add(VertexIndexValue);
-					}
-
-					JointsWeightsMap[VertexIndexValue].Add(TPair<int32, float>(BoneIndex, VertexWeight));
-				}
-			}
-		}
-
-		for (const TPair<uint32, TArray<TPair<int32, float>>>& Pair : JointsWeightsMap)
-		{
-			if (Pair.Value.Num() > MaxBoneInfluences)
-			{
-				MaxBoneInfluences = Pair.Value.Num();
-			}
-		}
-
-		JointsWeightsGroups = MaxBoneInfluences / 4;
-		if (MaxBoneInfluences % 4 != 0)
-		{
-			JointsWeightsGroups++;
-		}
-	}
-
-	uint32 NumTriangleIndices = Mesh->max_face_triangles * 3;
-	TArray<uint32> TriangleIndices;
-	TriangleIndices.AddUninitialized(NumTriangleIndices);
-
-	TArray<FglTFRuntimePrimitive> Primitives;
-
-	uint32 NumMaterials = Node->materials.count;
-	if (NumMaterials == 0)
-	{
-		// fallback to the default material
-		NumMaterials = 1;
-	}
-
-	Primitives.AddDefaulted(NumMaterials);
-
-	bIsSkeletal = JointsWeightsMap.Num() > 0;
-
-	if (bIsSkeletal)
-	{
-		MaterialsConfig = &SkeletalMeshMaterialsConfig;
-	}
-
-	for (uint32 PrimitiveIndex = 0; PrimitiveIndex < NumMaterials; PrimitiveIndex++)
+	for (uint32 PrimitiveIndex = PrimitiveBase; PrimitiveIndex < PrimitiveBase + NumMaterials; PrimitiveIndex++)
 	{
 		FglTFRuntimePrimitive& Primitive = Primitives[PrimitiveIndex];
 
 		if (Node->materials.count > 0)
 		{
-			ufbx_material* MeshMaterial = Mesh->materials.data[PrimitiveIndex];
+			ufbx_material* MeshMaterial = Mesh->materials.data[PrimitiveIndex - PrimitiveBase];
 
-			if (!MaterialsConfig->bSkipLoad)
+			if (!MaterialsConfig.bSkipLoad)
 			{
-				Primitive.Material = glTFRuntimeFBX::LoadMaterial(Asset, RuntimeFBXCacheData.ToSharedRef(), MeshMaterial, *MaterialsConfig);
+				Primitive.Material = glTFRuntimeFBX::LoadMaterial(Asset, RuntimeFBXCacheData.ToSharedRef(), MeshMaterial, MaterialsConfig);
 			}
 		}
 
@@ -905,9 +1338,9 @@ bool UglTFRuntimeFBXFunctionLibrary::LoadFBXAsRuntimeLODByNode(UglTFRuntimeAsset
 			MaterialIndex = Mesh->face_material.data[FaceIndex];
 		}
 
-		if (Primitives.IsValidIndex(MaterialIndex))
+		if (Primitives.IsValidIndex(PrimitiveBase + MaterialIndex))
 		{
-			FglTFRuntimePrimitive& Primitive = Primitives[MaterialIndex];
+			FglTFRuntimePrimitive& Primitive = Primitives[PrimitiveBase + MaterialIndex];
 
 			ufbx_face Face = Mesh->faces.data[FaceIndex];
 			uint32 NumTriangles = ufbx_triangulate_face(TriangleIndices.GetData(), NumTriangleIndices, Mesh, Face);
@@ -992,14 +1425,26 @@ bool UglTFRuntimeFBXFunctionLibrary::LoadFBXAsRuntimeLODByNode(UglTFRuntimeAsset
 		}
 	}
 
-	// ensure only non-empty primitives are added
-	for (FglTFRuntimePrimitive& Primitive : Primitives)
+	return true;
+}
+
+int32 UglTFRuntimeFBXFunctionLibrary::GetFBXSkinDeformersNum(UglTFRuntimeAsset* Asset)
+{
+	if (!Asset)
 	{
-		if (Primitive.Indices.Num() > 0)
+		return false;
+	}
+
+	TSharedPtr<FglTFRuntimeFBXCacheData> RuntimeFBXCacheData = nullptr;
+	{
+		FScopeLock Lock(&(Asset->GetParser()->PluginsCacheDataLock));
+
+		RuntimeFBXCacheData = glTFRuntimeFBX::GetCacheData(Asset);
+		if (!RuntimeFBXCacheData)
 		{
-			RuntimeLOD.Primitives.Add(MoveTemp(Primitive));
+			return false;
 		}
 	}
 
-	return true;
+	return static_cast<int32>(RuntimeFBXCacheData->Scene->skin_deformers.count);
 }
