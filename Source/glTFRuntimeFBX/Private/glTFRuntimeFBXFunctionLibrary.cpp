@@ -1378,7 +1378,14 @@ bool UglTFRuntimeFBXFunctionLibrary::FillFBXPrimitives(UglTFRuntimeAsset* Asset,
 				}
 				else
 				{
-					Primitive.Positions.Add(Asset->GetParser()->TransformPosition(FVector(Position.x, Position.y, Position.z)));
+					if (Node->has_geometry_transform)
+					{
+						Primitive.Positions.Add(glTFRuntimeFBX::GetTransform(Asset, Node->geometry_transform).TransformPosition(Asset->GetParser()->TransformPosition(FVector(Position.x, Position.y, Position.z))));
+					}
+					else
+					{
+						Primitive.Positions.Add(Asset->GetParser()->TransformPosition(FVector(Position.x, Position.y, Position.z)));
+					}
 				}
 
 				for (FglTFRuntimeMorphTarget& MorphTarget : Primitive.MorphTargets)
