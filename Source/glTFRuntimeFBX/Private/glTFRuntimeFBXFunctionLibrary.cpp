@@ -40,7 +40,7 @@ namespace glTFRuntimeFBX
 		return Asset->GetParser()->TransformTransform(Transform);
 	}
 
-	void FillSkeleton(UglTFRuntimeAsset* Asset, ufbx_skin_deformer* Skin, ufbx_node* Node, const int32 ParentIndex, TArray<FglTFRuntimeBone>& Skeleton, TMap<FString, int32>& BonesMap, bool& bRootProcessed)
+	void FillSkeleton(UglTFRuntimeAsset* Asset, ufbx_skin_deformer* Skin, ufbx_node* Node, const int32 ParentIndex, TArray<FglTFRuntimeBone>& Skeleton, TMap<FString, int32>& BonesMap)
 	{
 
 		FglTFRuntimeBone Bone;
@@ -51,9 +51,6 @@ namespace glTFRuntimeFBX
 		{
 			if (Skin->clusters.data[ClusterIndex]->bone_node == Node)
 			{
-				// as soon as we find a bone, we consider the root processed
-				bRootProcessed = true;
-
 				ufbx_matrix BoneMatrix = Skin->clusters.data[ClusterIndex]->bind_to_world;
 
 				bool bFound = false;
@@ -83,10 +80,6 @@ namespace glTFRuntimeFBX
 
 		if (!bHasBone)
 		{
-			if (bRootProcessed)
-			{
-				return;
-			}
 			Bone.Transform = glTFRuntimeFBX::GetTransform(Asset, Node->local_transform);
 		}
 
@@ -99,7 +92,7 @@ namespace glTFRuntimeFBX
 
 		for (ufbx_node* Child : Node->children)
 		{
-			FillSkeleton(Asset, Skin, Child, NewIndex, Skeleton, BonesMap, bRootProcessed);
+			FillSkeleton(Asset, Skin, Child, NewIndex, Skeleton, BonesMap);
 		}
 	}
 
@@ -272,6 +265,12 @@ namespace glTFRuntimeFBX
 	{
 		FglTFRuntimeMaterial Material;
 
+		Material.BaseSpecularFactor = 0.5;
+		Material.bHasRoughnessFactor = true;
+		Material.RoughnessFactor = 0.5;
+		Material.bHasMetallicFactor = true;
+		Material.MetallicFactor = 0;
+
 		if (MeshMaterial->pbr.base_color.has_value)
 		{
 			Material.BaseColorFactor = FLinearColor(MeshMaterial->pbr.base_color.value_vec4.x,
@@ -280,7 +279,12 @@ namespace glTFRuntimeFBX
 				MeshMaterial->pbr.base_color.value_vec4.w);
 			Material.bHasBaseColorFactor = true;
 
-			if (MeshMaterial->pbr.base_color.value_vec4.w < 1.0)
+			if (MeshMaterial->pbr.opacity.has_value)
+			{
+				Material.BaseColorFactor.A = MeshMaterial->pbr.opacity.value_real;
+			}
+
+			if (Material.BaseColorFactor.A < 1.0)
 			{
 				Material.MaterialType = EglTFRuntimeMaterialType::Translucent;
 			}
@@ -288,12 +292,56 @@ namespace glTFRuntimeFBX
 
 		LoadTexture(Asset, RuntimeFBXCacheData, MeshMaterial->pbr.base_color.texture, Material.BaseColorTextureCache, true, MaterialsConfig);
 
+		// manage opacity
+		UTexture2D* OpacityTexture = nullptr;
+		LoadTexture(Asset, RuntimeFBXCacheData, MeshMaterial->fbx.transparency_color.texture, OpacityTexture, false, MaterialsConfig);
+		if (OpacityTexture)
+		{
+			// no base color, use only opacity
+			if (!Material.BaseColorTextureCache)
+			{
+				Material.BaseColorTextureCache = OpacityTexture;
+			}
+			else
+			{
+				// patch the base color texture (only if the sizes are compatible)
+				if (Material.BaseColorTextureCache->GetSurfaceWidth() == OpacityTexture->GetSurfaceWidth() && Material.BaseColorTextureCache->GetSurfaceHeight() == OpacityTexture->GetSurfaceHeight() && Material.BaseColorTextureCache->GetPixelFormat() == EPixelFormat::PF_B8G8R8A8 && Material.BaseColorTextureCache->GetPixelFormat() == OpacityTexture->GetPixelFormat())
+				{
+					FTexturePlatformData* BaseColorPlatformData = Material.BaseColorTextureCache->GetPlatformData();
+					FTexturePlatformData* OpacityPlatformData = OpacityTexture->GetPlatformData();
+
+					if (BaseColorPlatformData->Mips.Num() == OpacityPlatformData->Mips.Num())
+					{
+						for (int32 MipIndex = 0; MipIndex < BaseColorPlatformData->Mips.Num(); MipIndex++)
+						{
+							uint8* BaseColorBytes = reinterpret_cast<uint8*>(BaseColorPlatformData->Mips[MipIndex].BulkData.Lock(LOCK_READ_WRITE));
+							const uint8* OpacityBytes = reinterpret_cast<const uint8*>(OpacityPlatformData->Mips[MipIndex].BulkData.Lock(LOCK_READ_WRITE));
+
+							for (uint16 MipY = 0; MipY < BaseColorPlatformData->Mips[MipIndex].SizeY; MipY++)
+							{
+								for (uint16 MipX = 0; MipX < BaseColorPlatformData->Mips[MipIndex].SizeX; MipX++)
+								{
+									const int32 Offset = MipY * BaseColorPlatformData->Mips[MipIndex].SizeX * 4 + (MipX * 4);
+									BaseColorBytes[Offset + 3] = OpacityBytes[Offset];
+								}
+							}
+
+							OpacityPlatformData->Mips[MipIndex].BulkData.Unlock();
+							BaseColorPlatformData->Mips[MipIndex].BulkData.Unlock();
+						}
+
+						Material.BaseColorTextureCache->UpdateResource();
+					}
+				}
+			}
+			Material.MaterialType = EglTFRuntimeMaterialType::Translucent;
+		}
+
 		LoadTexture(Asset, RuntimeFBXCacheData, MeshMaterial->pbr.normal_map.texture, Material.NormalTextureCache, false, MaterialsConfig);
 
 		if (MeshMaterial->pbr.metalness.has_value)
 		{
 			Material.MetallicFactor = MeshMaterial->pbr.metalness.value_real;
-			Material.bHasMetallicFactor = true;
 		}
 
 		LoadTexture(Asset, RuntimeFBXCacheData, MeshMaterial->pbr.metalness.texture, Material.MetallicRoughnessTextureCache, false, MaterialsConfig);
@@ -585,38 +633,41 @@ UAnimSequence* UglTFRuntimeFBXFunctionLibrary::LoadFBXAnimAsSkeletalMeshAnimatio
 	const int32 NumFrames = SkeletalAnimationConfig.FramesPerSecond * Duration;
 	const float Delta = Duration / NumFrames;
 
-	ufbx_skin_deformer* Skin = FoundNode->mesh->skin_deformers.data[0];
-
 	FglTFRuntimePoseTracksMap PosesMap;
 	TMap<FName, TArray<TPair<float, float>>> MorphTargetCurves;
 
-	for (int32 ClusterIndex = 0; ClusterIndex < Skin->clusters.count; ClusterIndex++)
-	{
-		ufbx_skin_cluster* Cluster = Skin->clusters.data[ClusterIndex];
+	const int32 BonesNum = SkeletalMesh->GetRefSkeleton().GetNum();
 
-		const FString BoneName = UTF8_TO_TCHAR(Cluster->bone_node->name.data);
+	for (int32 BoneIndex = 0; BoneIndex < BonesNum; BoneIndex++)
+	{
+		const FString BoneName = SkeletalMesh->GetRefSkeleton().GetBoneName(BoneIndex).ToString();
+
+		if (!RuntimeFBXCacheData->NodesNamesMap.Contains(BoneName))
+		{
+			continue;
+		}
+
+		ufbx_node* BoneNode = RuntimeFBXCacheData->NodesNamesMap[BoneName];
 
 		float Time = FoundAnim->time_begin;
-		if (SkeletalMesh->GetRefSkeleton().FindBoneIndex(*BoneName) > INDEX_NONE)
-		{
-			FRawAnimSequenceTrack Track;
-			for (int32 FrameIndex = 0; FrameIndex < NumFrames; FrameIndex++)
-			{
-				FTransform Transform = glTFRuntimeFBX::GetTransform(Asset, ufbx_evaluate_transform(FoundAnim->anim, Cluster->bone_node, Time));
-#if ENGINE_MAJOR_VERSION >= 5
-				Track.PosKeys.Add(FVector3f(Transform.GetLocation()));
-				Track.RotKeys.Add(FQuat4f(Transform.GetRotation()));
-				Track.ScaleKeys.Add(FVector3f(Transform.GetScale3D()));
-#else
-				Track.PosKeys.Add(Transform.GetLocation());
-				Track.RotKeys.Add(Transform.GetRotation());
-				Track.ScaleKeys.Add(Transform.GetScale3D());
-#endif
-				Time += Delta;
-			}
 
-			PosesMap.Add(BoneName, MoveTemp(Track));
+		FRawAnimSequenceTrack Track;
+		for (int32 FrameIndex = 0; FrameIndex < NumFrames; FrameIndex++)
+		{
+			FTransform Transform = glTFRuntimeFBX::GetTransform(Asset, ufbx_evaluate_transform(FoundAnim->anim, BoneNode, Time));
+#if ENGINE_MAJOR_VERSION >= 5
+			Track.PosKeys.Add(FVector3f(Transform.GetLocation()));
+			Track.RotKeys.Add(FQuat4f(Transform.GetRotation()));
+			Track.ScaleKeys.Add(FVector3f(Transform.GetScale3D()));
+#else
+			Track.PosKeys.Add(Transform.GetLocation());
+			Track.RotKeys.Add(Transform.GetRotation());
+			Track.ScaleKeys.Add(Transform.GetScale3D());
+#endif
+			Time += Delta;
 		}
+
+		PosesMap.Add(BoneName, MoveTemp(Track));
 	}
 
 	for (uint32 BlendDeformerIndex = 0; BlendDeformerIndex < FoundNode->mesh->blend_deformers.count; BlendDeformerIndex++)
@@ -738,14 +789,12 @@ bool UglTFRuntimeFBXFunctionLibrary::FillFBXSkinDeformer(UglTFRuntimeAsset* Asse
 			ufbx_node* Parent = RootNode->parent;
 			while (Parent && !Parent->is_root)
 			{
-
 				RootNode = Parent;
 
 				Parent = Parent->parent;
 			}
 
-			bool bRootProcessed = false;
-			glTFRuntimeFBX::FillSkeleton(Asset, SkinDeformer, RootNode, INDEX_NONE, Skeleton, BonesMap, bRootProcessed);
+			glTFRuntimeFBX::FillSkeleton(Asset, SkinDeformer, RootNode, INDEX_NONE, Skeleton, BonesMap);
 		}
 
 		const FString BoneName = UTF8_TO_TCHAR(Cluster->bone_node->name.data);
@@ -822,7 +871,6 @@ bool UglTFRuntimeFBXFunctionLibrary::LoadFBXAsRuntimeLODByNode(UglTFRuntimeAsset
 
 	TMap<uint32, TArray<TPair<int32, float>>> JointsWeightsMap;
 	int32 JointsWeightsGroups = 1;
-
 
 	// skeletal mesh ?
 	if (Mesh->skin_deformers.count > 0)
@@ -1272,7 +1320,6 @@ bool UglTFRuntimeFBXFunctionLibrary::FillFBXPrimitives(UglTFRuntimeAsset* Asset,
 
 	const bool bIsSkeletal = JointsWeightsMap.Num() > 0;
 
-
 	uint32 NumMaterials = Node->materials.count;
 	if (NumMaterials == 0)
 	{
@@ -1315,6 +1362,8 @@ bool UglTFRuntimeFBXFunctionLibrary::FillFBXPrimitives(UglTFRuntimeAsset* Asset,
 				Primitive.Joints.AddDefaulted();
 				Primitive.Weights.AddDefaulted();
 			}
+
+			Primitive.bHighPrecisionWeights = true;
 		}
 
 		if (Mesh->vertex_uv.exists)
