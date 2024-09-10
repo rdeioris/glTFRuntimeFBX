@@ -241,6 +241,19 @@ namespace glTFRuntimeFBX
 					}
 				}
 			}
+
+			// final fallback to local filesystem
+			if (ImageData.Num() == 0)
+			{
+				if (Texture->filename.length > 0 && !(Asset->GetParser()->GetBaseDirectory().IsEmpty()))
+				{
+					const FString TextureFilename = Asset->GetParser()->GetBaseDirectory() / UTF8_TO_TCHAR(Texture->filename.data);
+					if (FPaths::FileExists(TextureFilename))
+					{
+						FFileHelper::LoadFileToArray(ImageData, *TextureFilename);
+					}
+				}
+			}
 		}
 
 		if (ImageData.Num() == 0)
@@ -484,6 +497,19 @@ namespace glTFRuntimeFBX
 				}
 			};
 
+		auto MaterialFBXSetTexture = [&](const ufbx_material_map& FBXMaterialMap, const FString& ParamName, const bool bSRGB)
+			{
+				if (FBXMaterialMap.texture_enabled)
+				{
+					UTexture2D* FBXTexture = nullptr;
+					if (LoadTexture(Asset, RuntimeFBXCacheData, FBXMaterialMap.texture, FBXTexture, bSRGB, MaterialsConfig) && FBXTexture)
+					{
+						Material->SetTextureParameterValue(*(ParamName + "Texture"), FBXTexture);
+						Material->SetScalarParameterValue(*(ParamName + "Factor"), 1.0);
+					}
+				}
+			};
+
 		// base_color + base_factor
 		MaterialFBXSetVectorAndTextureWithFactor(MeshMaterial->pbr.base_color, MeshMaterial->pbr.base_factor, "baseColor", true);
 
@@ -499,7 +525,7 @@ namespace glTFRuntimeFBX
 		}
 
 		// normal_map
-		MaterialFBXSetVectorAndTexture(MeshMaterial->pbr.normal_map, "normalMap", false);
+		MaterialFBXSetTexture(MeshMaterial->pbr.normal_map, "normalMap", false);
 
 		// roughness
 		MaterialFBXSetScalarAndTexture(MeshMaterial->pbr.roughness, "roughness", false);
