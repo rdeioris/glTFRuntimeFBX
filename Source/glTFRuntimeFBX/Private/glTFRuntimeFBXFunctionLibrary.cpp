@@ -263,92 +263,252 @@ namespace glTFRuntimeFBX
 
 	UMaterialInterface* LoadMaterial(UglTFRuntimeAsset* Asset, TSharedRef<FglTFRuntimeFBXCacheData> RuntimeFBXCacheData, ufbx_material* MeshMaterial, const FglTFRuntimeMaterialsConfig& MaterialsConfig)
 	{
-		FglTFRuntimeMaterial Material;
+		const bool bIsTwoSided = MeshMaterial->features.double_sided.enabled;
+		bool bIsTranslucent = false;
 
-		Material.BaseSpecularFactor = 0.5;
-		Material.bHasRoughnessFactor = true;
-		Material.RoughnessFactor = 0.5;
-		Material.bHasMetallicFactor = true;
-		Material.MetallicFactor = 0;
-
-		if (MeshMaterial->pbr.base_color.has_value)
+		if (MeshMaterial->pbr.transmission_color.texture_enabled)
 		{
-			Material.BaseColorFactor = FLinearColor(MeshMaterial->pbr.base_color.value_vec4.x,
-				MeshMaterial->pbr.base_color.value_vec4.y,
-				MeshMaterial->pbr.base_color.value_vec4.z,
-				MeshMaterial->pbr.base_color.value_vec4.w);
-			Material.bHasBaseColorFactor = true;
-
-			if (MeshMaterial->pbr.opacity.has_value)
+			bIsTranslucent = true;
+		}
+		else if (MeshMaterial->pbr.transmission_color.has_value)
+		{
+			if (MeshMaterial->pbr.transmission_color.value_components == 1 && MeshMaterial->pbr.transmission_color.value_real < 1.0)
 			{
-				Material.BaseColorFactor.A = MeshMaterial->pbr.opacity.value_real;
+				bIsTranslucent = true;
 			}
-
-			if (Material.BaseColorFactor.A < 1.0)
+			else if (MeshMaterial->pbr.transmission_color.value_components > 1 && MeshMaterial->pbr.transmission_color.value_vec4.w < 1.0)
 			{
-				Material.MaterialType = EglTFRuntimeMaterialType::Translucent;
+				bIsTranslucent = true;
 			}
 		}
 
-		LoadTexture(Asset, RuntimeFBXCacheData, MeshMaterial->pbr.base_color.texture, Material.BaseColorTextureCache, true, MaterialsConfig);
-
-		// manage opacity
-		UTexture2D* OpacityTexture = nullptr;
-		LoadTexture(Asset, RuntimeFBXCacheData, MeshMaterial->fbx.transparency_color.texture, OpacityTexture, false, MaterialsConfig);
-		if (OpacityTexture)
+		EglTFRuntimeMaterialType MaterialType = EglTFRuntimeMaterialType::Opaque;
+		if (bIsTwoSided && bIsTranslucent)
 		{
-			// no base color, use only opacity
-			if (!Material.BaseColorTextureCache)
+			MaterialType = EglTFRuntimeMaterialType::TwoSidedTranslucent;
+		}
+		else if (bIsTwoSided)
+		{
+			MaterialType = EglTFRuntimeMaterialType::TwoSided;
+		}
+		else if (bIsTranslucent)
+		{
+			MaterialType = EglTFRuntimeMaterialType::Translucent;
+		}
+
+		UMaterialInterface* BaseMaterial = nullptr;
+
+		if (!MaterialsConfig.ForceMaterial)
+		{
+			const FString MaterialName = UTF8_TO_TCHAR(MeshMaterial->name.data);
+
+			if (MaterialsConfig.MaterialsOverrideByNameMap.Contains(MaterialName))
 			{
-				Material.BaseColorTextureCache = OpacityTexture;
+				BaseMaterial = MaterialsConfig.MaterialsOverrideByNameMap[MaterialName];
+			}
+			else if (MaterialsConfig.UberMaterialsOverrideMap.Contains(MaterialType))
+			{
+				BaseMaterial = MaterialsConfig.UberMaterialsOverrideMap[MaterialType];
 			}
 			else
 			{
-				// patch the base color texture (only if the sizes are compatible)
-				if (Material.BaseColorTextureCache->GetSurfaceWidth() == OpacityTexture->GetSurfaceWidth() && Material.BaseColorTextureCache->GetSurfaceHeight() == OpacityTexture->GetSurfaceHeight() && Material.BaseColorTextureCache->GetPixelFormat() == EPixelFormat::PF_B8G8R8A8 && Material.BaseColorTextureCache->GetPixelFormat() == OpacityTexture->GetPixelFormat())
+				if (bIsTwoSided)
 				{
-					FTexturePlatformData* BaseColorPlatformData = Material.BaseColorTextureCache->GetPlatformData();
-					FTexturePlatformData* OpacityPlatformData = OpacityTexture->GetPlatformData();
-
-					if (BaseColorPlatformData->Mips.Num() == OpacityPlatformData->Mips.Num())
+					if (bIsTranslucent)
 					{
-						for (int32 MipIndex = 0; MipIndex < BaseColorPlatformData->Mips.Num(); MipIndex++)
-						{
-							uint8* BaseColorBytes = reinterpret_cast<uint8*>(BaseColorPlatformData->Mips[MipIndex].BulkData.Lock(LOCK_READ_WRITE));
-							const uint8* OpacityBytes = reinterpret_cast<const uint8*>(OpacityPlatformData->Mips[MipIndex].BulkData.Lock(LOCK_READ_WRITE));
 
-							for (uint16 MipY = 0; MipY < BaseColorPlatformData->Mips[MipIndex].SizeY; MipY++)
-							{
-								for (uint16 MipX = 0; MipX < BaseColorPlatformData->Mips[MipIndex].SizeX; MipX++)
-								{
-									const int32 Offset = MipY * BaseColorPlatformData->Mips[MipIndex].SizeX * 4 + (MipX * 4);
-									BaseColorBytes[Offset + 3] = OpacityBytes[Offset];
-								}
-							}
-
-							OpacityPlatformData->Mips[MipIndex].BulkData.Unlock();
-							BaseColorPlatformData->Mips[MipIndex].BulkData.Unlock();
-						}
-
-						Material.BaseColorTextureCache->UpdateResource();
+						BaseMaterial = LoadObject<UMaterialInterface>(nullptr, TEXT("/glTFRuntimeFBX/MI_glTFRuntimeFBXTwoSidedTranslucent"));
+					}
+					else
+					{
+						BaseMaterial = LoadObject<UMaterialInterface>(nullptr, TEXT("/glTFRuntimeFBX/MI_glTFRuntimeFBXTwoSided"));
+					}
+				}
+				else
+				{
+					if (bIsTranslucent)
+					{
+						BaseMaterial = LoadObject<UMaterialInterface>(nullptr, TEXT("/glTFRuntimeFBX/MI_glTFRuntimeFBXTranslucent"));
+					}
+					else
+					{
+						BaseMaterial = LoadObject<UMaterialInterface>(nullptr, TEXT("/glTFRuntimeFBX/M_glTFRuntimeFBXBase"));
 					}
 				}
 			}
-			Material.MaterialType = EglTFRuntimeMaterialType::Translucent;
 		}
-
-		LoadTexture(Asset, RuntimeFBXCacheData, MeshMaterial->pbr.normal_map.texture, Material.NormalTextureCache, false, MaterialsConfig);
-
-		if (MeshMaterial->pbr.metalness.has_value)
+		else
 		{
-			Material.MetallicFactor = MeshMaterial->pbr.metalness.value_real;
+			BaseMaterial = MaterialsConfig.ForceMaterial;
 		}
 
-		LoadTexture(Asset, RuntimeFBXCacheData, MeshMaterial->pbr.metalness.texture, Material.MetallicRoughnessTextureCache, false, MaterialsConfig);
+		if (!BaseMaterial)
+		{
+			Asset->GetParser()->AddError("BuildMaterial()", "Unable to find glTFRuntimeFBX Material, ensure it has been packaged, falling back to default material");
+			return UMaterial::GetDefaultMaterial(EMaterialDomain::MD_Surface);
+		}
 
-		LoadTexture(Asset, RuntimeFBXCacheData, MeshMaterial->pbr.emission_color.texture, Material.EmissiveTextureCache, true, MaterialsConfig);
+		UMaterialInstanceDynamic* Material = UMaterialInstanceDynamic::Create(BaseMaterial, GetTransientPackage());
+		if (!Material)
+		{
+			Asset->GetParser()->AddError("BuildMaterial()", "Unable to create material instance, falling back to default material");
+			return UMaterial::GetDefaultMaterial(EMaterialDomain::MD_Surface);
+		}
 
-		return Asset->GetParser()->BuildMaterial(-1, UTF8_TO_TCHAR(MeshMaterial->name.data), Material, MaterialsConfig, true);
+		// make it public to allow exports
+		Material->SetFlags(EObjectFlags::RF_Public);
+
+		auto MaterialFBXSetVectorAndTextureWithFactor = [&](const ufbx_material_map& FBXMaterialMap, const ufbx_material_map& FBXMaterialFactorMap, const FString& ParamName, const bool bSRGB)
+			{
+				if (FBXMaterialMap.texture_enabled)
+				{
+					UTexture2D* FBXTexture = nullptr;
+					if (LoadTexture(Asset, RuntimeFBXCacheData, FBXMaterialMap.texture, FBXTexture, bSRGB, MaterialsConfig) && FBXTexture)
+					{
+						Material->SetTextureParameterValue(*(ParamName + "Texture"), FBXTexture);
+						Material->SetVectorParameterValue(*(ParamName + "Factor"), FLinearColor(1.0, 1.0, 1.0, 1.0));
+					}
+
+					if (FBXMaterialFactorMap.has_value)
+					{
+						if (FBXMaterialFactorMap.value_components == 1)
+						{
+							Material->SetVectorParameterValue(*(ParamName + "Factor"), FLinearColor(FBXMaterialFactorMap.value_real, FBXMaterialFactorMap.value_real, FBXMaterialFactorMap.value_real, FBXMaterialFactorMap.value_real));
+						}
+						else if (FBXMaterialFactorMap.value_components > 1)
+						{
+							Material->SetVectorParameterValue(*(ParamName + "Factor"), FLinearColor(FBXMaterialFactorMap.value_vec4.x, FBXMaterialFactorMap.value_vec4.y, FBXMaterialFactorMap.value_vec4.z, FBXMaterialFactorMap.value_vec4.w));
+						}
+					}
+				}
+				else if (FBXMaterialMap.has_value)
+				{
+					FLinearColor BaseValue = FLinearColor(FBXMaterialMap.value_vec4.x, FBXMaterialMap.value_vec4.y, FBXMaterialMap.value_vec4.z, FBXMaterialMap.value_vec4.w);
+					if (FBXMaterialFactorMap.texture_enabled)
+					{
+						UTexture2D* FBXTexture = nullptr;
+						if (LoadTexture(Asset, RuntimeFBXCacheData, FBXMaterialFactorMap.texture, FBXTexture, bSRGB, MaterialsConfig) && FBXTexture)
+						{
+							Material->SetTextureParameterValue(*(ParamName + "Texture"), FBXTexture);
+						}
+					}
+					else if (FBXMaterialFactorMap.has_value)
+					{
+						if (FBXMaterialFactorMap.value_components == 1)
+						{
+							BaseValue *= FLinearColor(FBXMaterialFactorMap.value_real, FBXMaterialFactorMap.value_real, FBXMaterialFactorMap.value_real, FBXMaterialFactorMap.value_real);
+						}
+						else if (FBXMaterialFactorMap.value_components > 1)
+						{
+							BaseValue *= FLinearColor(FBXMaterialFactorMap.value_vec4.x, FBXMaterialFactorMap.value_vec4.y, FBXMaterialFactorMap.value_vec4.z, FBXMaterialFactorMap.value_vec4.w);
+						}
+					}
+
+					Material->SetVectorParameterValue(*(ParamName + "Factor"), BaseValue);
+				}
+			};
+
+		auto MaterialFBXSetVectorAndTexture = [&](const ufbx_material_map& FBXMaterialMap, const FString& ParamName, const bool bSRGB)
+			{
+				if (FBXMaterialMap.texture_enabled)
+				{
+					UTexture2D* FBXTexture = nullptr;
+					if (LoadTexture(Asset, RuntimeFBXCacheData, FBXMaterialMap.texture, FBXTexture, bSRGB, MaterialsConfig) && FBXTexture)
+					{
+						Material->SetTextureParameterValue(*(ParamName + "Texture"), FBXTexture);
+						Material->SetVectorParameterValue(*(ParamName + "Factor"), FLinearColor(1.0, 1.0, 1.0, 1.0));
+					}
+				}
+				else if (FBXMaterialMap.has_value)
+				{
+					const FLinearColor BaseValue = FLinearColor(FBXMaterialMap.value_vec4.x, FBXMaterialMap.value_vec4.y, FBXMaterialMap.value_vec4.z, FBXMaterialMap.value_vec4.w);
+					Material->SetVectorParameterValue(*(ParamName + "Factor"), BaseValue);
+				}
+			};
+
+		auto MaterialFBXSetScalarAndTextureWithFactor = [&](const ufbx_material_map& FBXMaterialMap, const ufbx_material_map& FBXMaterialFactorMap, const FString& ParamName, const bool bSRGB)
+			{
+				if (FBXMaterialMap.texture_enabled)
+				{
+					UTexture2D* FBXTexture = nullptr;
+					if (LoadTexture(Asset, RuntimeFBXCacheData, FBXMaterialMap.texture, FBXTexture, bSRGB, MaterialsConfig) && FBXTexture)
+					{
+						Material->SetTextureParameterValue(*(ParamName + "Texture"), FBXTexture);
+						Material->SetScalarParameterValue(*(ParamName + "Factor"), 1.0);
+					}
+
+					if (FBXMaterialFactorMap.has_value)
+					{
+						Material->SetScalarParameterValue(*(ParamName + "Factor"), FBXMaterialFactorMap.value_real);
+					}
+				}
+				else if (FBXMaterialMap.has_value)
+				{
+					double BaseValue = FBXMaterialMap.value_real;
+					if (FBXMaterialFactorMap.texture_enabled)
+					{
+						UTexture2D* FBXTexture = nullptr;
+						if (LoadTexture(Asset, RuntimeFBXCacheData, FBXMaterialFactorMap.texture, FBXTexture, bSRGB, MaterialsConfig) && FBXTexture)
+						{
+							Material->SetTextureParameterValue(*(ParamName + "Texture"), FBXTexture);
+						}
+					}
+					else if (FBXMaterialFactorMap.has_value)
+					{
+						BaseValue *= FBXMaterialFactorMap.value_real;
+					}
+
+					Material->SetScalarParameterValue(*(ParamName + "Factor"), BaseValue);
+				}
+			};
+
+		auto MaterialFBXSetScalarAndTexture = [&](const ufbx_material_map& FBXMaterialMap, const FString& ParamName, const bool bSRGB)
+			{
+				if (FBXMaterialMap.texture_enabled)
+				{
+					UTexture2D* FBXTexture = nullptr;
+					if (LoadTexture(Asset, RuntimeFBXCacheData, FBXMaterialMap.texture, FBXTexture, bSRGB, MaterialsConfig) && FBXTexture)
+					{
+						Material->SetTextureParameterValue(*(ParamName + "Texture"), FBXTexture);
+						Material->SetScalarParameterValue(*(ParamName + "Factor"), 1.0);
+					}
+				}
+				else if (FBXMaterialMap.has_value)
+				{
+					Material->SetScalarParameterValue(*(ParamName + "Factor"), FBXMaterialMap.value_real);
+				}
+			};
+
+		// base_color + base_factor
+		MaterialFBXSetVectorAndTextureWithFactor(MeshMaterial->pbr.base_color, MeshMaterial->pbr.base_factor, "baseColor", true);
+
+		if (bIsTranslucent)
+		{
+			// TODO: transmission_factor is currently disabled as I have no idea how it is supposed to work :P
+#if 0
+			// transmission_color + transmission_factor
+			MaterialFBXSetScalarAndTextureWithFactor(MeshMaterial->pbr.transmission_color, MeshMaterial->pbr.transmission_factor, "transmission", false);
+#endif
+			// transmission_color
+			MaterialFBXSetScalarAndTexture(MeshMaterial->pbr.transmission_color, "transmission", false);
+		}
+
+		// normal_map
+		MaterialFBXSetVectorAndTexture(MeshMaterial->pbr.normal_map, "normalMap", false);
+
+		// roughness
+		MaterialFBXSetScalarAndTexture(MeshMaterial->pbr.roughness, "roughness", false);
+
+		// metallic
+		MaterialFBXSetScalarAndTexture(MeshMaterial->pbr.metalness, "metalness", false);
+
+		// specular
+		MaterialFBXSetScalarAndTextureWithFactor(MeshMaterial->pbr.specular_color, MeshMaterial->pbr.specular_factor, "specular", false);
+
+		// emissive_color + emissive_factor
+		MaterialFBXSetVectorAndTextureWithFactor(MeshMaterial->pbr.emission_color, MeshMaterial->pbr.emission_factor, "emission", true);
+
+		return Material;
 	}
 }
 
@@ -668,7 +828,7 @@ UAnimSequence* UglTFRuntimeFBXFunctionLibrary::LoadFBXAnimAsSkeletalMeshAnimatio
 		}
 
 		PosesMap.Add(BoneName, MoveTemp(Track));
-	}
+}
 
 	for (uint32 BlendDeformerIndex = 0; BlendDeformerIndex < FoundNode->mesh->blend_deformers.count; BlendDeformerIndex++)
 	{
@@ -766,7 +926,7 @@ UAnimSequence* UglTFRuntimeFBXFunctionLibrary::LoadFBXExternalAnimAsSkeletalMesh
 		}
 
 		PosesMap.Add(BoneName, MoveTemp(Track));
-	}
+}
 
 	return Asset->GetParser()->LoadSkeletalAnimationFromTracksAndMorphTargets(SkeletalMesh, PosesMap, MorphTargetCurves, Duration, SkeletalAnimationConfig);
 }
@@ -1339,7 +1499,6 @@ bool UglTFRuntimeFBXFunctionLibrary::FillFBXPrimitives(UglTFRuntimeAsset* Asset,
 				, Mesh->blend_deformers.data[BlendDeformerIndex]->channels.data[BlendDeformerChannelIndex]->target_shape);
 		}
 	}
-
 
 	for (uint32 PrimitiveIndex = PrimitiveBase; PrimitiveIndex < PrimitiveBase + NumMaterials; PrimitiveIndex++)
 	{
