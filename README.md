@@ -162,6 +162,8 @@ HEAT (https://heat.tech/) for providing the test assets and supporting the devel
 
 Acer Inc (https://www.acer.com/) for sponsoring the development and providing additional test assets.
 
+Eric Liu (GameInstitute), the author of the (now archived) RuntimeMeshLoader project (https://github.com/GameInstitute/RuntimeMeshLoader) that has been kind enough to advertise this plugin on the README of the project.
+
 ## Very Very Special Thanks
 
-The ufbx developers: https://github.com/ufbx/ufbx
+To the ufbx developers: https://github.com/ufbx/ufbx
