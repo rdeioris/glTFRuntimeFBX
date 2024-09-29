@@ -779,6 +779,17 @@ UAnimSequence* UglTFRuntimeFBXFunctionLibrary::LoadFBXAnimAsSkeletalMeshAnimatio
 		return nullptr;
 	}
 
+	return LoadFBXAnimAsSkeletalAnimation(Asset, FBXAnim, FBXNode, SkeletalMesh->GetSkeleton(), SkeletalAnimationConfig);
+}
+
+
+UAnimSequence* UglTFRuntimeFBXFunctionLibrary::LoadFBXAnimAsSkeletalAnimation(UglTFRuntimeAsset* Asset, const FglTFRuntimeFBXAnim& FBXAnim, const FglTFRuntimeFBXNode& FBXNode, USkeleton* Skeleton, const FglTFRuntimeSkeletalAnimationConfig& SkeletalAnimationConfig)
+{
+	if (!Asset || !Skeleton)
+	{
+		return nullptr;
+	}
+
 	TSharedPtr<FglTFRuntimeFBXCacheData> RuntimeFBXCacheData = nullptr;
 	{
 		FScopeLock Lock(&(Asset->GetParser()->PluginsCacheDataLock));
@@ -827,11 +838,11 @@ UAnimSequence* UglTFRuntimeFBXFunctionLibrary::LoadFBXAnimAsSkeletalMeshAnimatio
 	FglTFRuntimePoseTracksMap PosesMap;
 	TMap<FName, TArray<TPair<float, float>>> MorphTargetCurves;
 
-	const int32 BonesNum = SkeletalMesh->GetRefSkeleton().GetNum();
+	const int32 BonesNum = Skeleton->GetReferenceSkeleton().GetNum();
 
 	for (int32 BoneIndex = 0; BoneIndex < BonesNum; BoneIndex++)
 	{
-		const FString BoneName = SkeletalMesh->GetRefSkeleton().GetBoneName(BoneIndex).ToString();
+		const FString BoneName = Skeleton->GetReferenceSkeleton().GetBoneName(BoneIndex).ToString();
 
 		if (!RuntimeFBXCacheData->NodesNamesMap.Contains(BoneName))
 		{
@@ -859,7 +870,7 @@ UAnimSequence* UglTFRuntimeFBXFunctionLibrary::LoadFBXAnimAsSkeletalMeshAnimatio
 		}
 
 		PosesMap.Add(BoneName, MoveTemp(Track));
-}
+	}
 
 	for (uint32 BlendDeformerIndex = 0; BlendDeformerIndex < FoundNode->mesh->blend_deformers.count; BlendDeformerIndex++)
 	{
@@ -879,12 +890,22 @@ UAnimSequence* UglTFRuntimeFBXFunctionLibrary::LoadFBXAnimAsSkeletalMeshAnimatio
 		}
 	}
 
-	return Asset->GetParser()->LoadSkeletalAnimationFromTracksAndMorphTargets(SkeletalMesh, PosesMap, MorphTargetCurves, Duration, SkeletalAnimationConfig);
+	return Asset->GetParser()->LoadSkeletalAnimationFromTracksAndMorphTargets(Skeleton, PosesMap, MorphTargetCurves, Duration, SkeletalAnimationConfig);
 }
 
 UAnimSequence* UglTFRuntimeFBXFunctionLibrary::LoadFBXExternalAnimAsSkeletalMeshAnimation(UglTFRuntimeAsset* Asset, const FglTFRuntimeFBXAnim& FBXAnim, USkeletalMesh* SkeletalMesh, const FglTFRuntimeSkeletalAnimationConfig& SkeletalAnimationConfig)
 {
 	if (!Asset || !SkeletalMesh)
+	{
+		return nullptr;
+	}
+
+	return LoadFBXExternalAnimAsSkeletalAnimation(Asset, FBXAnim, SkeletalMesh->GetSkeleton(), SkeletalAnimationConfig);
+}
+
+UAnimSequence* UglTFRuntimeFBXFunctionLibrary::LoadFBXExternalAnimAsSkeletalAnimation(UglTFRuntimeAsset* Asset, const FglTFRuntimeFBXAnim& FBXAnim, USkeleton* Skeleton, const FglTFRuntimeSkeletalAnimationConfig& SkeletalAnimationConfig)
+{
+	if (!Asset || !Skeleton)
 	{
 		return nullptr;
 	}
@@ -925,11 +946,11 @@ UAnimSequence* UglTFRuntimeFBXFunctionLibrary::LoadFBXExternalAnimAsSkeletalMesh
 	FglTFRuntimePoseTracksMap PosesMap;
 	TMap<FName, TArray<TPair<float, float>>> MorphTargetCurves;
 
-	const int32 BonesNum = SkeletalMesh->GetRefSkeleton().GetNum();
+	const int32 BonesNum = Skeleton->GetReferenceSkeleton().GetNum();
 
 	for (int32 BoneIndex = 0; BoneIndex < BonesNum; BoneIndex++)
 	{
-		const FString BoneName = SkeletalMesh->GetRefSkeleton().GetBoneName(BoneIndex).ToString();
+		const FString BoneName = Skeleton->GetReferenceSkeleton().GetBoneName(BoneIndex).ToString();
 
 		if (!RuntimeFBXCacheData->NodesNamesMap.Contains(BoneName))
 		{
@@ -957,9 +978,9 @@ UAnimSequence* UglTFRuntimeFBXFunctionLibrary::LoadFBXExternalAnimAsSkeletalMesh
 		}
 
 		PosesMap.Add(BoneName, MoveTemp(Track));
-}
+	}
 
-	return Asset->GetParser()->LoadSkeletalAnimationFromTracksAndMorphTargets(SkeletalMesh, PosesMap, MorphTargetCurves, Duration, SkeletalAnimationConfig);
+	return Asset->GetParser()->LoadSkeletalAnimationFromTracksAndMorphTargets(Skeleton, PosesMap, MorphTargetCurves, Duration, SkeletalAnimationConfig);
 }
 
 bool UglTFRuntimeFBXFunctionLibrary::FillFBXSkinDeformer(UglTFRuntimeAsset* Asset, ufbx_skin_deformer* SkinDeformer, TArray<FglTFRuntimeBone>& Skeleton, TMap<uint32, TArray<TPair<int32, float>>>& JointsWeightsMap, int32& JointsWeightsGroups)
