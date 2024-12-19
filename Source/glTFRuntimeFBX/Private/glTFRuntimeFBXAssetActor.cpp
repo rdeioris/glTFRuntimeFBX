@@ -142,7 +142,9 @@ void AglTFRuntimeFBXAssetActor::ProcessNode(USceneComponent* CurrentParentCompon
 			if (bIsSkeletal)
 			{
 				USkeletalMeshComponent* NewSkeletalMeshComponent = NewObject<USkeletalMeshComponent>(this, GetSafeNodeName<USkeletalMeshComponent>(FBXNode));
+#ifdef GLTFRUNTIME_HAS_BONE_REMAPPER_LOD
 				Asset->GetParser()->RemapRuntimeLODBoneNames(LOD, SkeletalMeshConfig.SkeletonConfig);
+#endif
 				USkeletalMesh* SkeletalMesh = Asset->LoadSkeletalMeshFromRuntimeLODs({ LOD }, -1, SkeletalMeshConfig);
 				if (SkeletalMesh)
 				{
