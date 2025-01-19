@@ -93,6 +93,9 @@ public:
 	UFUNCTION(BlueprintCallable, meta = (AdvancedDisplay = "SkeletalAnimationConfig", AutoCreateRefTerm = "SkeletalAnimationConfig"), Category = "glTFRuntime|FBX")
 	static UAnimSequence* LoadFBXExternalAnimAsSkeletalAnimation(UglTFRuntimeAsset* Asset, const FglTFRuntimeFBXAnim& FBXAnim, USkeleton* Skeleton, const FglTFRuntimeSkeletalAnimationConfig& SkeletalAnimationConfig);
 
+	UFUNCTION(BlueprintCallable, meta = (AdvancedDisplay = "SkeletalAnimationConfig", AutoCreateRefTerm = "SkeletalAnimationConfig"), Category = "glTFRuntime|FBX")
+	static UAnimSequence* LoadFBXRawAnimAsSkeletalAnimation(UglTFRuntimeAsset* Asset, const FglTFRuntimeFBXAnim& FBXAnim, USkeleton* Skeleton, const FglTFRuntimeSkeletalAnimationConfig& SkeletalAnimationConfig);
+
 	UFUNCTION(BlueprintCallable, BlueprintPure, Category = "glTFRuntime|FBX")
 	static int32 GetFBXSkinDeformersNum(UglTFRuntimeAsset* Asset);
 

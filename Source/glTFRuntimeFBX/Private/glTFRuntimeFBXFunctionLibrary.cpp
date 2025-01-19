@@ -983,6 +983,85 @@ UAnimSequence* UglTFRuntimeFBXFunctionLibrary::LoadFBXExternalAnimAsSkeletalAnim
 	return Asset->GetParser()->LoadSkeletalAnimationFromTracksAndMorphTargets(Skeleton, PosesMap, MorphTargetCurves, Duration, SkeletalAnimationConfig);
 }
 
+UAnimSequence* UglTFRuntimeFBXFunctionLibrary::LoadFBXRawAnimAsSkeletalAnimation(UglTFRuntimeAsset* Asset, const FglTFRuntimeFBXAnim& FBXAnim, USkeleton* Skeleton, const FglTFRuntimeSkeletalAnimationConfig& SkeletalAnimationConfig)
+{
+	if (!Asset || !Skeleton)
+	{
+		return nullptr;
+	}
+
+	TSharedPtr<FglTFRuntimeFBXCacheData> RuntimeFBXCacheData = nullptr;
+	{
+		FScopeLock Lock(&(Asset->GetParser()->PluginsCacheDataLock));
+
+		RuntimeFBXCacheData = glTFRuntimeFBX::GetCacheData(Asset);
+		if (!RuntimeFBXCacheData)
+		{
+			return nullptr;
+		}
+	}
+
+	ufbx_anim_stack* FoundAnim = nullptr;
+
+	for (int32 AnimStackIndex = 0; AnimStackIndex < RuntimeFBXCacheData->Scene->anim_stacks.count; AnimStackIndex++)
+	{
+		ufbx_anim_stack* AnimStack = RuntimeFBXCacheData->Scene->anim_stacks.data[AnimStackIndex];
+
+		if (AnimStack->element_id == FBXAnim.Id)
+		{
+			FoundAnim = AnimStack;
+			break;
+		}
+	}
+
+	if (!FoundAnim)
+	{
+		return nullptr;
+	}
+
+	const float Duration = FoundAnim->time_end - FoundAnim->time_begin;
+	const int32 NumFrames = SkeletalAnimationConfig.FramesPerSecond * Duration;
+	const float Delta = Duration / NumFrames;
+
+	FglTFRuntimePoseTracksMap PosesMap;
+	TMap<FName, TArray<TPair<float, float>>> MorphTargetCurves;
+
+	TMap<FString, FTransform> RestTransforms;
+
+	for (const TPair<FString, ufbx_node*>& Pair : RuntimeFBXCacheData->NodesNamesMap)
+	{
+		const FString BoneName = Pair.Key;
+
+		ufbx_node* BoneNode = Pair.Value;
+
+		float Time = FoundAnim->time_begin;
+
+		RestTransforms.Add(BoneName, glTFRuntimeFBX::GetTransform(Asset, BoneNode->local_transform));
+
+		FRawAnimSequenceTrack Track;
+		for (int32 FrameIndex = 0; FrameIndex < NumFrames; FrameIndex++)
+		{
+			FTransform Transform = glTFRuntimeFBX::GetTransform(Asset, ufbx_evaluate_transform(FoundAnim->anim, BoneNode, Time));
+#if ENGINE_MAJOR_VERSION >= 5
+			Track.PosKeys.Add(FVector3f(Transform.GetLocation()));
+			Track.RotKeys.Add(FQuat4f(Transform.GetRotation()));
+			Track.ScaleKeys.Add(FVector3f(Transform.GetScale3D()));
+#else
+			Track.PosKeys.Add(Transform.GetLocation());
+			Track.RotKeys.Add(Transform.GetRotation());
+			Track.ScaleKeys.Add(Transform.GetScale3D());
+#endif
+			Time += Delta;
+		}
+
+		PosesMap.Add(BoneName, MoveTemp(Track));
+	}
+
+	FglTFRuntimePoseTracksMap Tracks = Asset->GetParser()->FixupAnimationTracks(PosesMap, RestTransforms, SkeletalAnimationConfig);
+
+	return Asset->GetParser()->LoadSkeletalAnimationFromTracksAndMorphTargets(Skeleton, Tracks, MorphTargetCurves, Duration, SkeletalAnimationConfig);
+}
+
 bool UglTFRuntimeFBXFunctionLibrary::FillFBXSkinDeformer(UglTFRuntimeAsset* Asset, ufbx_skin_deformer* SkinDeformer, TArray<FglTFRuntimeBone>& Skeleton, TMap<uint32, TArray<TPair<int32, float>>>& JointsWeightsMap, int32& JointsWeightsGroups)
 {
 	TSet<FString> Bones;
