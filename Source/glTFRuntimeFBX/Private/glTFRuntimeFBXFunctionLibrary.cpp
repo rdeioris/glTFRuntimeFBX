@@ -1731,14 +1731,7 @@ bool UglTFRuntimeFBXFunctionLibrary::FillFBXPrimitives(UglTFRuntimeAsset* Asset,
 				{
 					ufbx_blend_shape* BlendShape = MorphTargets[MorphTarget.Name];
 					const ufbx_vec3 MorphTargetPosition = ufbx_get_blend_shape_vertex_offset(BlendShape, Mesh->vertex_indices.data[Index]);
-					if (bIsSkeletal)
-					{
-						MorphTarget.Positions.Add(glTFRuntimeFBX::GetTransform(Asset, Node->local_transform).TransformPosition(Asset->GetParser()->TransformPosition(FVector(MorphTargetPosition.x, MorphTargetPosition.y, MorphTargetPosition.z))));
-					}
-					else
-					{
-						MorphTarget.Positions.Add(Asset->GetParser()->TransformPosition(FVector(MorphTargetPosition.x, MorphTargetPosition.y, MorphTargetPosition.z)));
-					}
+					MorphTarget.Positions.Add(Asset->GetParser()->TransformPosition(FVector(MorphTargetPosition.x, MorphTargetPosition.y, MorphTargetPosition.z)));
 				}
 
 				if (Mesh->vertex_normal.exists)
