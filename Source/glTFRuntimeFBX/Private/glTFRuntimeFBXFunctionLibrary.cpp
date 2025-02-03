@@ -674,6 +674,39 @@ TArray<FglTFRuntimeFBXNode> UglTFRuntimeFBXFunctionLibrary::GetFBXNodeChildren(U
 	return Nodes;
 }
 
+bool UglTFRuntimeFBXFunctionLibrary::GetFBXNodeParent(UglTFRuntimeAsset* Asset, const FglTFRuntimeFBXNode& FBXNode, FglTFRuntimeFBXNode& FBXParentNode)
+{
+	if (!Asset)
+	{
+		return false;
+	}
+
+	TSharedPtr<FglTFRuntimeFBXCacheData> RuntimeFBXCacheData = nullptr;
+	{
+		FScopeLock Lock(&(Asset->GetParser()->PluginsCacheDataLock));
+
+		RuntimeFBXCacheData = glTFRuntimeFBX::GetCacheData(Asset);
+		if (!RuntimeFBXCacheData)
+		{
+			return false;
+		}
+	}
+
+	if (RuntimeFBXCacheData->NodesMap.Contains(FBXNode.Id))
+	{
+		ufbx_node* ParentNode = RuntimeFBXCacheData->NodesMap[FBXNode.Id]->parent;
+		if (!ParentNode)
+		{
+			return false;
+		}
+
+		glTFRuntimeFBX::FillNode(Asset, ParentNode, FBXParentNode);
+		return true;
+	}
+
+	return false;
+}
+
 bool UglTFRuntimeFBXFunctionLibrary::IsFBXNodeBone(UglTFRuntimeAsset* Asset, const FglTFRuntimeFBXNode& FBXNode)
 {
 	TSharedPtr<FglTFRuntimeFBXCacheData> RuntimeFBXCacheData = nullptr;

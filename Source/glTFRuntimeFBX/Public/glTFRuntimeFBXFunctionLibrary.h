@@ -61,6 +61,9 @@ public:
 	static TArray<FglTFRuntimeFBXNode> GetFBXNodeChildren(UglTFRuntimeAsset* Asset, const FglTFRuntimeFBXNode& FBXNode);
 
 	UFUNCTION(BlueprintCallable, BlueprintPure, Category = "glTFRuntime|FBX")
+	static bool GetFBXNodeParent(UglTFRuntimeAsset* Asset, const FglTFRuntimeFBXNode& FBXNode, FglTFRuntimeFBXNode& FBXParentNode);
+
+	UFUNCTION(BlueprintCallable, BlueprintPure, Category = "glTFRuntime|FBX")
 	static TArray<FglTFRuntimeFBXAnim> GetFBXAnimations(UglTFRuntimeAsset* Asset);
 
 	UFUNCTION(BlueprintCallable, BlueprintPure, Category = "glTFRuntime|FBX")
