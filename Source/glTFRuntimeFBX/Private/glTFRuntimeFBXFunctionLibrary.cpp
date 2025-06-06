@@ -279,7 +279,7 @@ namespace glTFRuntimeFBX
 		return TextureCache != nullptr;
 	}
 
-	UMaterialInterface* LoadMaterial(UglTFRuntimeAsset* Asset, TSharedRef<FglTFRuntimeFBXCacheData> RuntimeFBXCacheData, ufbx_material* MeshMaterial, const FglTFRuntimeMaterialsConfig& MaterialsConfig)
+	UMaterialInterface* LoadMaterial(UglTFRuntimeAsset* Asset, TSharedRef<FglTFRuntimeFBXCacheData> RuntimeFBXCacheData, ufbx_material* MeshMaterial, const FglTFRuntimeMaterialsConfig& MaterialsConfig, FString& MaterialName)
 	{
 		const bool bIsTwoSided = MeshMaterial->features.double_sided.enabled;
 		bool bIsTranslucent = false;
@@ -318,7 +318,7 @@ namespace glTFRuntimeFBX
 
 		if (!MaterialsConfig.ForceMaterial)
 		{
-			const FString MaterialName = UTF8_TO_TCHAR(MeshMaterial->name.data);
+			MaterialName = UTF8_TO_TCHAR(MeshMaterial->name.data);
 
 			if (MaterialsConfig.MaterialsOverrideByNameMap.Contains(MaterialName))
 			{
@@ -1674,7 +1674,7 @@ bool UglTFRuntimeFBXFunctionLibrary::FillFBXPrimitives(UglTFRuntimeAsset* Asset,
 
 			if (!MaterialsConfig.bSkipLoad)
 			{
-				Primitive.Material = glTFRuntimeFBX::LoadMaterial(Asset, RuntimeFBXCacheData.ToSharedRef(), MeshMaterial, MaterialsConfig);
+				Primitive.Material = glTFRuntimeFBX::LoadMaterial(Asset, RuntimeFBXCacheData.ToSharedRef(), MeshMaterial, MaterialsConfig, Primitive.MaterialName);
 			}
 		}
 
