@@ -1,8 +1,11 @@
-// Copyright 2023-2024 - Roberto De Ioris
+// Copyright 2023-2025 - Roberto De Ioris
 
 #include "glTFRuntimeFBXFunctionLibrary.h"
 #include "Runtime/Launch/Resources/Version.h"
 #include "UObject/StrongObjectPtr.h"
+#include "Components/DirectionalLightComponent.h"
+#include "Components/PointLightComponent.h"
+#include "Components/SpotLightComponent.h"
 #if ENGINE_MAJOR_VERSION >= 5 && ENGINE_MINOR_VERSION >= 2
 #include "MaterialDomain.h"
 #else
@@ -107,6 +110,8 @@ namespace glTFRuntimeFBX
 		FBXNode.Name = UTF8_TO_TCHAR(Node->name.data);
 		FBXNode.Transform = GetTransform(Asset, Node->local_transform);
 		FBXNode.bHasMesh = Node->mesh != nullptr;
+		FBXNode.bIsLight = Node->light != nullptr;
+
 	}
 
 	TSharedPtr<FglTFRuntimeFBXCacheData> GetCacheData(UglTFRuntimeAsset* Asset)
@@ -1819,4 +1824,91 @@ int32 UglTFRuntimeFBXFunctionLibrary::GetFBXSkinDeformersNum(UglTFRuntimeAsset* 
 	}
 
 	return static_cast<int32>(RuntimeFBXCacheData->Scene->skin_deformers.count);
+}
+
+ULightComponent* UglTFRuntimeFBXFunctionLibrary::LoadFBXLight(UglTFRuntimeAsset* Asset, const FglTFRuntimeFBXNode& FBXNode, AActor* Actor, const FglTFRuntimeLightConfig& LightConfig)
+{
+	if (!Asset)
+	{
+		return nullptr;
+	}
+
+	TSharedPtr<FglTFRuntimeFBXCacheData> RuntimeFBXCacheData = nullptr;
+	{
+		FScopeLock Lock(&(Asset->GetParser()->PluginsCacheDataLock));
+
+		RuntimeFBXCacheData = glTFRuntimeFBX::GetCacheData(Asset);
+		if (!RuntimeFBXCacheData)
+		{
+			return nullptr;
+		}
+	}
+
+	if (!RuntimeFBXCacheData->NodesMap.Contains(FBXNode.Id))
+	{
+		return nullptr;
+	}
+
+	ufbx_node* Node = RuntimeFBXCacheData->NodesMap[FBXNode.Id];
+
+	if (!Node->light)
+	{
+		return nullptr;
+	}
+
+	ufbx_light_type LightType = Node->light->type;
+
+	if (LightType == ufbx_light_type::UFBX_LIGHT_POINT)
+	{
+		UPointLightComponent* PointLight = NewObject<UPointLightComponent>(Actor);
+		PointLight->SetLightColor(FLinearColor(Node->light->color.x, Node->light->color.y, Node->light->color.z));
+
+		PointLight->SetIntensityUnits(ELightUnits::Candelas);
+		PointLight->bUseInverseSquaredFalloff = true;
+
+		const double Intensity = Node->light->intensity;
+		PointLight->SetIntensity(Intensity);
+
+		const float DefaultAttenuation = Intensity * LightConfig.DefaultAttenuationMultiplier;
+
+		PointLight->SetAttenuationRadius(DefaultAttenuation * Asset->GetParser()->GetSceneScale());
+
+		return PointLight;
+	}
+	else if (LightType == ufbx_light_type::UFBX_LIGHT_DIRECTIONAL)
+	{
+		UDirectionalLightComponent* DirectionalLight = NewObject<UDirectionalLightComponent>(Actor);
+		DirectionalLight->SetLightColor(FLinearColor(Node->light->color.x, Node->light->color.y, Node->light->color.z));
+
+		const double Intensity = Node->light->intensity;
+		DirectionalLight->SetIntensity(Intensity);
+
+		return DirectionalLight;
+	}
+	else if (LightType == ufbx_light_type::UFBX_LIGHT_SPOT)
+	{
+		USpotLightComponent* SpotLight = NewObject<USpotLightComponent>(Actor);
+		SpotLight->SetLightColor(FLinearColor(Node->light->color.x, Node->light->color.y, Node->light->color.z));
+
+		SpotLight->SetIntensityUnits(ELightUnits::Candelas);
+		SpotLight->bUseInverseSquaredFalloff = true;
+
+		const double Intensity = Node->light->intensity;
+		SpotLight->SetIntensity(Intensity);
+
+		const float DefaultAttenuation = Intensity * LightConfig.DefaultAttenuationMultiplier;
+
+		SpotLight->SetAttenuationRadius(DefaultAttenuation * Asset->GetParser()->GetSceneScale());
+
+
+		const float InnerConeAngle = Node->light->inner_angle;
+		const float OuterConeAngle = Node->light->outer_angle;
+
+		SpotLight->SetInnerConeAngle(FMath::RadiansToDegrees(InnerConeAngle));
+		SpotLight->SetOuterConeAngle(FMath::RadiansToDegrees(OuterConeAngle));
+
+		return SpotLight;
+	}
+
+	return nullptr;
 }

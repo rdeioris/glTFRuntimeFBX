@@ -21,6 +21,9 @@ struct FglTFRuntimeFBXNode
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "glTFRuntime|FBX")
 	bool bHasMesh = false;
 
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "glTFRuntime|FBX")
+	bool bIsLight = false;
+
 	uint32 Id = 0;
 };
 
@@ -101,6 +104,10 @@ public:
 
 	UFUNCTION(BlueprintCallable, BlueprintPure, Category = "glTFRuntime|FBX")
 	static int32 GetFBXSkinDeformersNum(UglTFRuntimeAsset* Asset);
+
+	UFUNCTION(BlueprintCallable, meta = (AutoCreateRefTerm = "StaticMeshMaterialsConfig,SkeletalMeshMaterialsConfig"), Category = "glTFRuntime|FBX")
+	static ULightComponent* LoadFBXLight(UglTFRuntimeAsset* Asset, const FglTFRuntimeFBXNode& FBXNode, AActor* Actor, const FglTFRuntimeLightConfig& LightConfig);
+
 
 	static bool FillFBXPrimitives(UglTFRuntimeAsset* Asset, TSharedPtr<struct FglTFRuntimeFBXCacheData> RuntimeFBXCacheData, struct ufbx_node* Node, const int32 PrimitiveBase, TArray<FglTFRuntimePrimitive>& Primitives, const TMap<uint32, TArray<TPair<int32, float>>>& JointsWeightsMap, const int32 JointsWeightsGroups, const FglTFRuntimeMaterialsConfig& MaterialsConfig);
 	static bool FillFBXSkinDeformer(UglTFRuntimeAsset* Asset, struct ufbx_skin_deformer* SkinDeformer, TArray<FglTFRuntimeBone>& Skeleton, TMap<uint32, TArray<TPair<int32, float>>>& JointsWeightsMap, int32& JointsWeightsGroups);

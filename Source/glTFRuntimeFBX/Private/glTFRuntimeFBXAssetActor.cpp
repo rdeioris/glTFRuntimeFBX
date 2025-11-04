@@ -12,6 +12,7 @@ AglTFRuntimeFBXAssetActor::AglTFRuntimeFBXAssetActor()
 	PrimaryActorTick.bCanEverTick = false;
 	DefaultAnimation = EglTFRuntimeFBXAssetActorDefaultAnimation::Default;
 	bDefaultAnimationLoop = true;
+	bLoadLights = true;
 
 	AssetRoot = CreateDefaultSubobject<USceneComponent>(TEXT("AssetRoot"));
 	RootComponent = AssetRoot;
@@ -166,6 +167,10 @@ void AglTFRuntimeFBXAssetActor::ProcessNode(USceneComponent* CurrentParentCompon
 				SceneComponent = NewStaticMeshComponent;
 			}
 		}
+	}
+	else if (bLoadLights && FBXNode.bIsLight)
+	{
+		SceneComponent = UglTFRuntimeFBXFunctionLibrary::LoadFBXLight(Asset, FBXNode, this, FglTFRuntimeLightConfig());
 	}
 
 	if (!SceneComponent)

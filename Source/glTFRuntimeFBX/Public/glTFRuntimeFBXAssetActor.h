@@ -75,6 +75,9 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Meta = (ExposeOnSpawn = true), Category = "glTFRuntime|FBX")
 	bool bDefaultAnimationLoop;
 
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Meta = (ExposeOnSpawn = true), Category = "glTFRuntime|FBX")
+	bool bLoadLights;
+
 	UFUNCTION(BlueprintNativeEvent, Category = "glTFRuntime|FBX", meta = (DisplayName = "On StaticMeshComponent Created"))
 	void ReceiveOnStaticMeshComponentCreated(UStaticMeshComponent* StaticMeshComponent);
 
