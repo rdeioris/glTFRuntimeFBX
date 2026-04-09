@@ -158,6 +158,10 @@ void AglTFRuntimeFBXAssetActor::ProcessNode(USceneComponent* CurrentParentCompon
 			else
 			{
 				UStaticMeshComponent* NewStaticMeshComponent = NewObject<UStaticMeshComponent>(this, GetSafeNodeName<UStaticMeshComponent>(FBXNode));
+				if (StaticMeshConfig.Outer == nullptr)
+				{
+					StaticMeshConfig.Outer = NewStaticMeshComponent;
+				}
 				UStaticMesh* StaticMesh = Asset->LoadStaticMeshFromRuntimeLODs({ LOD }, StaticMeshConfig);
 				if (StaticMesh)
 				{
@@ -196,6 +200,8 @@ void AglTFRuntimeFBXAssetActor::ProcessNode(USceneComponent* CurrentParentCompon
 		SceneComponent->SetRelativeTransform(FBXNode.Transform);
 	}
 	SceneComponent->RegisterComponent();
+
+	SceneComponent->ComponentTags.Add(*FString::Printf(TEXT("glTFRuntimeFBX::NodeName::%s"), *FBXNode.Name));
 
 	AddInstanceComponent(SceneComponent);
 
