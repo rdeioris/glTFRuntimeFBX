@@ -30,12 +30,16 @@ struct FglTFRuntimeFBXCacheData : FglTFRuntimePluginCacheData
 		}
 	}
 
+	TMap<ufbx_material*, TStrongObjectPtr<UMaterialInterface>> MaterialsCache;
 	TMap<ufbx_texture*, TStrongObjectPtr<UTexture2D>> TexturesCache;
 	FCriticalSection TexturesLock;
 };
 
 namespace glTFRuntimeFBX
 {
+	bool CanReadFromCache(const EglTFRuntimeCacheMode CacheMode) { return CacheMode == EglTFRuntimeCacheMode::Read || CacheMode == EglTFRuntimeCacheMode::ReadWrite; }
+	bool CanWriteToCache(const EglTFRuntimeCacheMode CacheMode) { return CacheMode == EglTFRuntimeCacheMode::Write || CacheMode == EglTFRuntimeCacheMode::ReadWrite; }
+
 	FTransform GetTransform(UglTFRuntimeAsset* Asset, ufbx_transform FbxTransform)
 	{
 		FTransform Transform;
@@ -286,6 +290,11 @@ namespace glTFRuntimeFBX
 
 	UMaterialInterface* LoadMaterial(UglTFRuntimeAsset* Asset, TSharedRef<FglTFRuntimeFBXCacheData> RuntimeFBXCacheData, ufbx_material* MeshMaterial, const FglTFRuntimeMaterialsConfig& MaterialsConfig, FString& MaterialName)
 	{
+		if (CanReadFromCache(MaterialsConfig.CacheMode) && RuntimeFBXCacheData->MaterialsCache.Contains(MeshMaterial))
+		{
+			return RuntimeFBXCacheData->MaterialsCache[MeshMaterial].Get();
+		}
+
 		const bool bIsTwoSided = MeshMaterial->features.double_sided.enabled;
 		bool bIsTranslucent = false;
 
@@ -321,41 +330,51 @@ namespace glTFRuntimeFBX
 
 		UMaterialInterface* BaseMaterial = nullptr;
 
+		MaterialName = UTF8_TO_TCHAR(MeshMaterial->name.data);
+
 		if (!MaterialsConfig.ForceMaterial)
 		{
-			MaterialName = UTF8_TO_TCHAR(MeshMaterial->name.data);
-
-			if (MaterialsConfig.MaterialsOverrideByNameMap.Contains(MaterialName))
+			if (MaterialsConfig.MaterialRemapper.Remapper.IsBound())
 			{
-				BaseMaterial = MaterialsConfig.MaterialsOverrideByNameMap[MaterialName];
-			}
-			else if (MaterialsConfig.UberMaterialsOverrideMap.Contains(MaterialType))
-			{
-				BaseMaterial = MaterialsConfig.UberMaterialsOverrideMap[MaterialType];
+				BaseMaterial = MaterialsConfig.MaterialRemapper.Remapper.Execute(
+					-1,
+					MaterialName,
+					MaterialsConfig.MaterialRemapper.Context);
 			}
 			else
 			{
-				if (bIsTwoSided)
+				if (MaterialsConfig.MaterialsOverrideByNameMap.Contains(MaterialName))
 				{
-					if (bIsTranslucent)
-					{
-
-						BaseMaterial = LoadObject<UMaterialInterface>(nullptr, TEXT("/glTFRuntimeFBX/MI_glTFRuntimeFBXTwoSidedTranslucent"));
-					}
-					else
-					{
-						BaseMaterial = LoadObject<UMaterialInterface>(nullptr, TEXT("/glTFRuntimeFBX/MI_glTFRuntimeFBXTwoSided"));
-					}
+					BaseMaterial = MaterialsConfig.MaterialsOverrideByNameMap[MaterialName];
+				}
+				else if (MaterialsConfig.UberMaterialsOverrideMap.Contains(MaterialType))
+				{
+					BaseMaterial = MaterialsConfig.UberMaterialsOverrideMap[MaterialType];
 				}
 				else
 				{
-					if (bIsTranslucent)
+					if (bIsTwoSided)
 					{
-						BaseMaterial = LoadObject<UMaterialInterface>(nullptr, TEXT("/glTFRuntimeFBX/MI_glTFRuntimeFBXTranslucent"));
+						if (bIsTranslucent)
+						{
+
+							BaseMaterial = LoadObject<UMaterialInterface>(nullptr, TEXT("/glTFRuntimeFBX/MI_glTFRuntimeFBXTwoSidedTranslucent"));
+						}
+						else
+						{
+							BaseMaterial = LoadObject<UMaterialInterface>(nullptr, TEXT("/glTFRuntimeFBX/MI_glTFRuntimeFBXTwoSided"));
+						}
 					}
 					else
 					{
-						BaseMaterial = LoadObject<UMaterialInterface>(nullptr, TEXT("/glTFRuntimeFBX/M_glTFRuntimeFBXBase"));
+						if (bIsTranslucent)
+						{
+							BaseMaterial = LoadObject<UMaterialInterface>(nullptr, TEXT("/glTFRuntimeFBX/MI_glTFRuntimeFBXTranslucent"));
+						}
+						else
+						{
+							BaseMaterial = LoadObject<UMaterialInterface>(nullptr, TEXT("/glTFRuntimeFBX/M_glTFRuntimeFBXBase"));
+						}
 					}
 				}
 			}
@@ -543,6 +562,11 @@ namespace glTFRuntimeFBX
 
 		// emissive_color + emissive_factor
 		MaterialFBXSetVectorAndTextureWithFactor(MeshMaterial->pbr.emission_color, MeshMaterial->pbr.emission_factor, "emission", true);
+
+		if (CanWriteToCache(MaterialsConfig.CacheMode))
+		{
+			RuntimeFBXCacheData->MaterialsCache.Add(MeshMaterial, TStrongObjectPtr<UMaterialInterface>(Material));
+		}
 
 		return Material;
 	}
