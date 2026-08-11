@@ -915,10 +915,28 @@ UAnimSequence* UglTFRuntimeFBXFunctionLibrary::LoadFBXAnimAsSkeletalAnimation(Ug
 
 		float Time = FoundAnim->time_begin;
 
+		// ufbx_evaluate_transform() returns the per-frame animated local transform in a
+		// different basis than Node->local_transform (the static bind pose GetTransform() is
+		// normally used for) - confirmed empirically: at matching timestamps, every animated
+		// bone's translation/rotation from this path was related to the correct (Unreal-native)
+		// value by the fixed permutation (x,y,z) -> (-z,x,-y), never plain-matching. Bind pose
+		// (built elsewhere via Node->local_transform) is unaffected and correct, so the
+		// correction is applied only to this per-frame animated sample, not inside GetTransform().
+		static const FQuat BasisCorrectionQuat(0.5, 0.5, -0.5, 0.5);
+		auto CorrectAnimBasis = [](const FTransform& RawTransform) -> FTransform
+			{
+				const FVector RawT = RawTransform.GetLocation();
+				const FVector CorrectedT(RawT.Y, -RawT.Z, -RawT.X);
+				const FQuat CorrectedR = BasisCorrectionQuat * RawTransform.GetRotation() * BasisCorrectionQuat.Inverse();
+				const FVector RawS = RawTransform.GetScale3D();
+				const FVector CorrectedS(RawS.Y, RawS.Z, RawS.X);
+				return FTransform(CorrectedR, CorrectedT, CorrectedS);
+			};
+
 		FRawAnimSequenceTrack Track;
 		for (int32 FrameIndex = 0; FrameIndex < NumFrames; FrameIndex++)
 		{
-			FTransform Transform = glTFRuntimeFBX::GetTransform(Asset, ufbx_evaluate_transform(FoundAnim->anim, BoneNode, Time));
+			FTransform Transform = CorrectAnimBasis(glTFRuntimeFBX::GetTransform(Asset, ufbx_evaluate_transform(FoundAnim->anim, BoneNode, Time)));
 #if ENGINE_MAJOR_VERSION >= 5
 			Track.PosKeys.Add(FVector3f(Transform.GetLocation()));
 			Track.RotKeys.Add(FQuat4f(Transform.GetRotation()));
@@ -1021,12 +1039,61 @@ UAnimSequence* UglTFRuntimeFBXFunctionLibrary::LoadFBXExternalAnimAsSkeletalAnim
 
 		ufbx_node* BoneNode = RuntimeFBXCacheData->NodesNamesMap[BoneName];
 
+		// A static bone (no real ufbx animation curves - e.g. a rig's root) still gets a constant
+		// value from ufbx_evaluate_transform(). Emitting a track for it anyway would override the
+		// target Skeleton's reference pose with that raw FBX bind value, which is wrong whenever
+		// the skeleton's own reference pose bakes in a deliberate static correction (e.g. an
+		// importer's axis fixup on the root bone) that the source FBX doesn't carry.
+		auto HasAnimationCurves = [FoundAnim, BoneNode]() -> bool
+			{
+				const int32 NumProbes = 5;
+				const float ProbeDuration = FoundAnim->time_end - FoundAnim->time_begin;
+				const ufbx_transform FirstProbe = ufbx_evaluate_transform(FoundAnim->anim, BoneNode, FoundAnim->time_begin);
+				for (int32 ProbeIndex = 1; ProbeIndex < NumProbes; ProbeIndex++)
+				{
+					const double ProbeTime = FoundAnim->time_begin + (ProbeDuration * ProbeIndex) / (NumProbes - 1);
+					const ufbx_transform Probe = ufbx_evaluate_transform(FoundAnim->anim, BoneNode, ProbeTime);
+					const bool bTranslationMatches = FMath::IsNearlyEqual(Probe.translation.x, FirstProbe.translation.x, 1e-5)
+						&& FMath::IsNearlyEqual(Probe.translation.y, FirstProbe.translation.y, 1e-5)
+						&& FMath::IsNearlyEqual(Probe.translation.z, FirstProbe.translation.z, 1e-5);
+					const bool bRotationMatches = FMath::IsNearlyEqual(Probe.rotation.x, FirstProbe.rotation.x, 1e-5)
+						&& FMath::IsNearlyEqual(Probe.rotation.y, FirstProbe.rotation.y, 1e-5)
+						&& FMath::IsNearlyEqual(Probe.rotation.z, FirstProbe.rotation.z, 1e-5)
+						&& FMath::IsNearlyEqual(Probe.rotation.w, FirstProbe.rotation.w, 1e-5);
+					if (!bTranslationMatches || !bRotationMatches)
+					{
+						return true;
+					}
+				}
+				return false;
+			};
+
+		if (!HasAnimationCurves())
+		{
+			continue;
+		}
+
 		float Time = FoundAnim->time_begin;
+
+		// ufbx_evaluate_transform() (the per-frame animated local transform) returns values in a
+		// different basis than Node->local_transform (the static bind pose GetTransform() uses),
+		// related by the fixed permutation (x,y,z) -> (-z,x,-y). Only applied to this per-frame
+		// animated sample - bind pose is unaffected and already correct.
+		static const FQuat BasisCorrectionQuat(0.5, 0.5, -0.5, 0.5);
+		auto CorrectAnimBasis = [](const FTransform& RawTransform) -> FTransform
+			{
+				const FVector RawT = RawTransform.GetLocation();
+				const FVector CorrectedT(RawT.Y, -RawT.Z, -RawT.X);
+				const FQuat CorrectedR = BasisCorrectionQuat * RawTransform.GetRotation() * BasisCorrectionQuat.Inverse();
+				const FVector RawS = RawTransform.GetScale3D();
+				const FVector CorrectedS(RawS.Y, RawS.Z, RawS.X);
+				return FTransform(CorrectedR, CorrectedT, CorrectedS);
+			};
 
 		FRawAnimSequenceTrack Track;
 		for (int32 FrameIndex = 0; FrameIndex < NumFrames; FrameIndex++)
 		{
-			FTransform Transform = glTFRuntimeFBX::GetTransform(Asset, ufbx_evaluate_transform(FoundAnim->anim, BoneNode, Time));
+			FTransform Transform = CorrectAnimBasis(glTFRuntimeFBX::GetTransform(Asset, ufbx_evaluate_transform(FoundAnim->anim, BoneNode, Time)));
 #if ENGINE_MAJOR_VERSION >= 5
 			Track.PosKeys.Add(FVector3f(Transform.GetLocation()));
 			Track.RotKeys.Add(FQuat4f(Transform.GetRotation()));
